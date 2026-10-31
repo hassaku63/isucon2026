@@ -177,9 +177,12 @@ func getMyCurrentPostHandler(h *HandlerContext) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		ctx := c.Request().Context()
 		userID := GetSession(c).UserID
-		var postID string
-		err := h.DB.GetContext(ctx, &postID, `
-   SELECT p.id FROM posts p
+		// 今日の投稿の ID を引く・投稿を引く・自分を引くの 3 回の問い合わせを 1 回にまとめる。
+		// europe / america からは DB までの往復（約 100ms）が 3 回分かかっていた
+		var post PostWithAuthor
+		err := h.DB.GetContext(ctx, &post, `
+   SELECT `+postColumns+`, `+userColumnsAs("u", "author")+`
+   FROM posts p
    JOIN posting_windows w ON w.id = p.posting_window_id
    JOIN users u ON u.id = p.author_id
    JOIN posting_windows current ON current.region = u.region AND current.ended_at IS NULL
@@ -192,18 +195,15 @@ func getMyCurrentPostHandler(h *HandlerContext) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		post, err := getPost(ctx, h.DB, postID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return NewAPIError(http.StatusNotFound, "post_not_found")
+		// 元の getUser は退会済みのユーザーを sql.ErrNoRows（500）にしていた
+		if post.Author.Status != "active" {
+			return sql.ErrNoRows
 		}
-		if err != nil {
+		user := post.Author
+		if err := user.setImageKey(); err != nil {
 			return err
 		}
-		user, err := getUser(ctx, h.DB, userID)
-		if err != nil {
-			return err
-		}
-		return c.JSON(http.StatusOK, getMyCurrentPostResponse(newPostResponse(post, user)))
+		return c.JSON(http.StatusOK, getMyCurrentPostResponse(newPostResponse(post.Post, user)))
 	}
 }
 
@@ -220,14 +220,15 @@ func getPostHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		ctx := c.Request().Context()
-		post, err := getPostWithAuthor(ctx, h.DB, input.PostID)
+		// 投稿と閲覧者の情報は互いに依存しないので並列に引く（往復 2 回 → 1 回）。判定の順序は元のまま
+		post, viewer, err, viewerErr := loadPostAndViewer(ctx, h.DB, GetSession(c).UserID, input.PostID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewAPIError(http.StatusNotFound, "post_not_found")
 		}
 		if err != nil {
 			return err
 		}
-		viewer, err := loadViewerContext(ctx, h.DB, GetSession(c).UserID)
+		err = viewerErr
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -48,7 +49,32 @@ func getFeedHandler(h *HandlerContext) echo.HandlerFunc {
 			return NewAPIError(http.StatusBadRequest, "invalid_pagination")
 		}
 		ctx := c.Request().Context()
-		viewer, err := loadViewerContext(ctx, h.DB, GetSession(c).UserID)
+		// 閲覧者の情報、フォロー先、候補の投稿は互いに依存しない（どれも閲覧者の ID だけで引ける）ので並列に引く。
+		// europe / america からは往復（約 100ms）が 2〜3 回分かかっていた。エラーの判定の順序は元のまま
+		viewerID := GetSession(c).UserID
+		beforePostedAt, beforeID := input.BeforePostedAt, input.BeforeID
+		if ranked {
+			beforePostedAt, beforeID = nil, ""
+		}
+		var wg sync.WaitGroup
+		var followeeIDs []string
+		var followErr error
+		if input.Feed == "following" {
+			wg.Go(func() {
+				followErr = h.DB.SelectContext(ctx, &followeeIDs, `SELECT followee_id FROM follows WHERE follower_id = $1`, viewerID)
+			})
+		}
+		var posts []PostWithAuthor
+		var postsErr error
+		wg.Go(func() {
+			posts, postsErr = selectPostsWithAuthor(ctx, h.DB, `
+   AND p.author_id <> $1 AND w.ended_at IS NULL
+   AND ($2::timestamptz IS NULL OR (p.posted_at, p.id) < ($2, $3))
+   ORDER BY p.posted_at DESC, p.id DESC
+  `, viewerID, beforePostedAt, beforeID)
+		})
+		viewer, err := loadViewerContext(ctx, h.DB, viewerID)
+		wg.Wait()
 		if errors.Is(err, sql.ErrNoRows) {
 			return c.JSON(http.StatusOK, getFeedResponse{Items: []feedItemResponse{}})
 		}
@@ -57,25 +83,15 @@ func getFeedHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 		following := map[string]bool{}
 		if input.Feed == "following" {
-			var followeeIDs []string
-			if err := h.DB.SelectContext(ctx, &followeeIDs, `SELECT followee_id FROM follows WHERE follower_id = $1`, viewer.ID); err != nil {
-				return err
+			if followErr != nil {
+				return followErr
 			}
 			for _, id := range followeeIDs {
 				following[id] = true
 			}
 		}
-		beforePostedAt, beforeID := input.BeforePostedAt, input.BeforeID
-		if ranked {
-			beforePostedAt, beforeID = nil, ""
-		}
-		posts, err := selectPostsWithAuthor(ctx, h.DB, `
-   AND p.author_id <> $1 AND w.ended_at IS NULL
-   AND ($2::timestamptz IS NULL OR (p.posted_at, p.id) < ($2, $3))
-   ORDER BY p.posted_at DESC, p.id DESC
-  `, viewer.ID, beforePostedAt, beforeID)
-		if err != nil {
-			return err
+		if postsErr != nil {
+			return postsErr
 		}
 		candidates := make([]PostWithAuthor, 0)
 		for _, post := range posts {
@@ -145,14 +161,13 @@ func recommendationScores(ctx context.Context, db sqlx.QueryerContext, viewer vi
 		UserLowID  string `db:"user_low_id"`
 		UserHighID string `db:"user_high_id"`
 	}
-	if err := sqlx.SelectContext(ctx, db, &friendships, sqlx.Rebind(sqlx.DOLLAR, query), args...); err != nil {
-		return nil, err
-	}
-	connections := map[string]int64{}
-	for _, friendship := range friendships {
-		connections[friendship.UserLowID] += int64(viewer.MutualFriends[friendship.UserHighID])
-		connections[friendship.UserHighID] += int64(viewer.MutualFriends[friendship.UserLowID])
-	}
+	// 友達関係と反応は互いに依存しないので並列に引く（往復 2 回 → 1 回）
+	var wg sync.WaitGroup
+	var friendshipsErr error
+	friendshipsQuery, friendshipsArgs := sqlx.Rebind(sqlx.DOLLAR, query), args
+	wg.Go(func() {
+		friendshipsErr = sqlx.SelectContext(ctx, db, &friendships, friendshipsQuery, friendshipsArgs...)
+	})
 
 	query, args, err = sqlx.In(`
   SELECT r.post_id, r.reactor_id AS user_id FROM realmojis r
@@ -164,15 +179,27 @@ func recommendationScores(ctx context.Context, db sqlx.QueryerContext, viewer vi
   WHERE c.post_id IN (?) AND c.deleted_at IS NULL
  `, postIDs, postIDs)
 	if err != nil {
+		wg.Wait()
 		return nil, err
 	}
 	var engagements []struct {
 		PostID string `db:"post_id"`
 		UserID string `db:"user_id"`
 	}
-	if err := sqlx.SelectContext(ctx, db, &engagements, sqlx.Rebind(sqlx.DOLLAR, query), args...); err != nil {
-		return nil, err
+	engagementsErr := sqlx.SelectContext(ctx, db, &engagements, sqlx.Rebind(sqlx.DOLLAR, query), args...)
+	wg.Wait()
+	if friendshipsErr != nil {
+		return nil, friendshipsErr
 	}
+	if engagementsErr != nil {
+		return nil, engagementsErr
+	}
+	connections := map[string]int64{}
+	for _, friendship := range friendships {
+		connections[friendship.UserLowID] += int64(viewer.MutualFriends[friendship.UserHighID])
+		connections[friendship.UserHighID] += int64(viewer.MutualFriends[friendship.UserLowID])
+	}
+
 	friendEngagements := map[string]int64{}
 	for _, engagement := range engagements {
 		if viewer.Friends[engagement.UserID] {
