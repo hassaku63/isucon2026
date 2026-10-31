@@ -40,3 +40,12 @@ ssh: `isucon2026-asia1` / `isucon2026-europe1` / `isucon2026-america1`（アプ�
 - 3台で同じ設定は `files/app/`、サーバーごとに違うものは `files/<ホスト名>/` に置く（ホスト名の方が優先）
 - 変更禁止のファイルは `infra/group_vars/all.yml` の `forbidden_paths` に入っていて、当たると infra.yml が止まる
 - ベンチの計測: `make bench-start` / `make bench-stop`
+
+## 進め方（PR とベンチ）
+
+- 実質的な変更は、issue（`.github/ISSUE_TEMPLATE/bottleneck.md` の形式）→ ブランチ → PR → マージ → デプロイの順で進める
+- マージしてデプロイしたあとのベンチ結果は、**その PR にコメントで追記する**
+  - ユーザーが貼るベンチマーカーの stdout を、**手を加えずにそのまま**コードブロックで載せる
+  - PR 本文の「効果の確かめ方」の項目ごとに、前後の数値と判定を書く
+  - 次の issue / PR につながる観測を書く
+- ベンチの記録やドキュメントの更新（`docs/`）は main に直接 commit してよい
