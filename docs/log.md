@@ -6,3 +6,4 @@
 | 11:02 | 初期状態のまま（計測付き） | 4533 | pass。DB の CPU が 100%。原因は realmojis の全件スキャン（画像取得）。グランプリまで残ったのは europe/america で各3人だけ。詳細 docs/bench/20261031-1102.md |
 | 11:24 | 計測用の設定を適用（nginx の JSON ログ、pg_stat_statements、スロークエリ 100ms 以上・ロック待ちのログ）。envcheck は4台とも通過 | - | `7042f82` |
 | 11:27 | 初期状態のまま（計測を強化して初めてのベンチ） | 3959 | pass。asia の参加者が 18→21人に増えた。グランプリの通過者は asia 3、europe 0、america 1人（前回は 17 / 3 / 3）。DB の時間の大半は画像取得（合計 431秒）とロック待ち。要約は `logs/bench-20261031-112740/summary.md` |
+| 11:43 | PR #2: realmojis(image_id) と friendships(user_high_id) にインデックスを追加（asia2 で事前に作成）。初めての app-deploy で、手元でビルドしたバイナリに差し替えた | - | `7c43b62` |
