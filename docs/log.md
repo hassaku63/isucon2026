@@ -17,3 +17,4 @@
 | 13:00 | PR #10: 画像署名のキャッシュ、exp を 60 秒単位に切り上げ、HMAC のループを速くする（出力は同じ） | - | `b1493b9` |
 | 12:57 | PR #10 の後 | **16891** | pass。最高記録（約 2 倍）。exp の 60 秒切り上げは許容された。asia のユーザーが 18→92 人に増えたが、グランプリ通過は 9/91。asia1 の CPU は imageSignature 34%、jpeg.Decode 29% |
 | 13:10 | PR #12: 投稿時の posting_windows の行ロックを FOR UPDATE → FOR SHARE（#7） | - | `8d8e877` |
+| 13:08 | PR #12 の後（投稿のロックを FOR SHARE） | 16563 | pass。スコアは横ばい（前回 16891）。europe/america の投稿 3.8/2.4→1.7/1.6 秒、posting_windows のロック 309→1.3 秒。asia の参加者が 132 人に増え、asia1 の CPU が足りない（グランプリ通過 22/131） |
