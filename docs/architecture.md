@@ -89,3 +89,21 @@ router 13.115.174.242:8080 / 443（ログイン禁止。内側からは 192.168.
 3. SSE（`/api/notifications`）が nginx でタイムアウトしている
 4. アクションログ（debug）を全リクエスト分 journald に書いていて、それを guard が全行 JSON パースしている
 5. PostgreSQL がほぼ初期設定（shared_buffers 128MB で、16GB の DB に対してキャッシュが小さい）
+
+## ログの保持とベンチごとの切り出し（11:25 確認）
+
+サーバー上の元のログは、ベンチごとにクリアしていない。競技中はすべてのベンチのログが同じファイルに溜まり続ける。`make bench-stop` が開始から停止までの時間で切り出して `logs/bench-<時刻>/` に保存する。
+
+| ログ | 元の場所 | 自動で消える・切り替わるタイミング | bench-stop での切り出し方 |
+|---|---|---|---|
+| nginx access / error | `/var/log/nginx/*.log` | logrotate が毎日（次回 2026-11-01 00:00 UTC = 09:00 JST）。競技中には来ない | 各行先頭の時刻で切り出す。access は JSON の行だけ（11:24 より前の旧形式は除く） |
+| アプリ / guard | journald（`/var/log/journal`、永続化あり、約 8〜16MB） | journald の容量上限（初期値）に達したとき | `journalctl --since` |
+| PostgreSQL | `/var/log/postgresql/postgresql-16-main.log` | logrotate が毎週 | 各行先頭の時刻で切り出す |
+| pg_stat_statements | DB 内 | **bench-start でリセット**（ここだけはベンチごとにクリアしている） | 停止時に上位 100 件を出力 |
+| pg_stat_user_tables | DB 内（累積） | PostgreSQL の再起動でもリセットされない | 開始時と停止時の値の差を取る |
+| vmstat / pidstat / sar | bench-start で起動し、`/tmp/benchmon/` に書く | bench-start のたびに消して作り直す | そのまま回収 |
+
+注意:
+- 時間で切り出しているので、開始から停止までの間にブラウザで動作確認をすると、そのアクセスも混ざる
+- nginx の時刻はリクエストが**終わった**時刻。SSE のような長いリクエストは、終わった時点の行になる
+- **journald の流量制限**: 初期値の 30 秒あたり 10000 行（サービスごと）を超えると、アプリのログが捨てられる。今のところ捨てられた形跡はない（11:25 確認）。アプリのログは guard の BAN 判定にも使われているので、スループットが 333 req/s を超えてきたら、`ISUREAL_LOG_LEVEL=info` にするか、制限を緩める必要がある
