@@ -4,3 +4,5 @@ ISUREAL_DB_PORT=5432
 ISUREAL_DB_USER=isureal
 ISUREAL_DB_PASSWORD=isureal
 ISUREAL_DB_NAME=isureal
+# GC の頻度を下げる（asia1 の CPU の約 4% が GC。メモリは十分空いている）
+GOGC=200
