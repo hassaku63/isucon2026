@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"database/sql"
 	"errors"
-	"image/jpeg"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -12,6 +11,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"
+
+	"example.com/isureal-company/isureal/internal/jpegcheck"
 )
 
 type replaceRealMojiRequest struct {
@@ -55,11 +56,11 @@ func replaceRealMojiHandler(h *HandlerContext) echo.HandlerFunc {
 		if err != nil {
 			return err
 		}
-		img, err := jpeg.Decode(bytes.NewReader(data))
+		width, height, err := jpegcheck.Validate(bytes.NewReader(data))
 		if err != nil {
 			return NewAPIError(http.StatusBadRequest, "invalid_realmoji")
 		}
-		if img.Bounds().Dx() > 512 || img.Bounds().Dy() > 512 {
+		if width > 512 || height > 512 {
 			return NewAPIError(http.StatusBadRequest, "invalid_realmoji")
 		}
 
