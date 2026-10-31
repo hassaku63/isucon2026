@@ -34,3 +34,5 @@
 | 14:43 | PR #22: ユーザー検索を 3 列で絞り込んでから取り直す、正規化を覚える（#24）。PR #23: PostgreSQL の shared_buffers 128MB → 1GB、effective_cache_size 3GB（#25）。asia2 の PostgreSQL を再起動 | - | `079d686` |
 | 14:48 | PR #27: IP BAN の一覧を裏で 200ms ごとに読み直す（#26） | - | `ec99949` |
 | 14:49 | PR #22・#23・#27 の後（検索、shared_buffers 1GB と PostgreSQL の再起動、IP BAN の裏の読み直し） | 12860 | pass。asia の人数が 18 人のまま増えず大きく下がった。asia2 の I/O 待ち 17→35%、asia の投稿期間の開始が 2〜5 秒。検索の CPU 15→0.9%、画像取得の OS からの読み込み 30.6 万→1.4 万ブロック。再起動直後の空のキャッシュか、shared_buffers そのものかは未確定 |
+| 15:00 | 同じ状態でもう一度（キャッシュは温まっている。計測に DB の I/O の内訳を追加） | 12819 | pass。asia は 18 人のまま。クエリのディスク読み込み 18.9 万ブロック（notifications・realmojis・comments）、読み込み最大 4002 回/秒（gp3 の上限超え）。ファイルのキャッシュが約 1GB 減ったのが原因と判断 |
+| 15:08 | PR #28: shared_buffers を 128MB に戻す（#23 を戻す）。asia2 の PostgreSQL を再起動 | - | `4bd6d3e` |
