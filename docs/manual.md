@@ -107,3 +107,9 @@
 ## 言語の切り替え
 
 `sudo systemctl disable --now isureal-go.service && sudo systemctl enable --now isureal-{go,nodejs,perl,php,python,ruby,rust}.service`（PHP は nginx 設定の追加が必要）
+
+## ポータルの質問と回答（他チームの質問も含む）
+
+| 確認した時刻 | 質問 | 回答 |
+|---|---|---|
+| 12:30 頃 | 画像URLの検証について変更は認められていますか | マニュアルに記載があるとおり、署名と期限の形式や検証結果を変えてはいけません。有効期限については、ベンチマーカが許容する限り変更しても構いません。 |
