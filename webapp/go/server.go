@@ -44,7 +44,6 @@ func NewServer(config *Config) *echo.Echo {
 		Config: config,
 		IPBans: &IPBanList{},
 	}
-	handlerContext.IPBans.StartReloading(db)
 	e.Use(IPBanMiddleware(handlerContext))
 
 	e.POST("/api/initialize", initializeHandler(handlerContext))

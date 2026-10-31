@@ -1,15 +1,12 @@
 package isureal
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"net/http"
 	"slices"
 	"strings"
-	"sync"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v5"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
@@ -30,32 +27,6 @@ func normalizeSearchText(value string) string {
 	return norm.NFC.String(cases.Fold().String(norm.NFC.String(value)))
 }
 
-// 正規化の結果は文字列だけで決まるので、ユーザー名・表示名ごとに覚えておく（検索のたびに全ユーザー分を計算していた）。
-// 上限を超えたら捨てて作り直す
-const normalizedSearchTextCacheLimit = 200000
-
-var normalizedSearchTextCache = struct {
-	sync.RWMutex
-	m map[string]string
-}{m: make(map[string]string)}
-
-func cachedNormalizeSearchText(value string) string {
-	normalizedSearchTextCache.RLock()
-	normalized, ok := normalizedSearchTextCache.m[value]
-	normalizedSearchTextCache.RUnlock()
-	if ok {
-		return normalized
-	}
-	normalized = normalizeSearchText(value)
-	normalizedSearchTextCache.Lock()
-	if len(normalizedSearchTextCache.m) >= normalizedSearchTextCacheLimit {
-		normalizedSearchTextCache.m = make(map[string]string)
-	}
-	normalizedSearchTextCache.m[value] = normalized
-	normalizedSearchTextCache.Unlock()
-	return normalized
-}
-
 func searchUsersHandler(h *HandlerContext) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		var input searchUsersRequest
@@ -70,73 +41,40 @@ func searchUsersHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 		ctx := c.Request().Context()
 		viewer := GetSession(c).UserID
-		response, err := searchUsers(ctx, h.DB, viewer, input)
+		var users []User
+		if err := h.DB.SelectContext(ctx, &users, `SELECT `+strings.Join(userColumns, ", ")+` FROM users WHERE status='active' AND id<>$1 AND ($2='' OR (username,id)>($2,$3)) ORDER BY username, id`, viewer, input.BeforeUsername, input.BeforeID); err != nil {
+			return err
+		}
+		blocked, err := getBlockedUserIDs(ctx, h.DB, viewer)
 		if err != nil {
 			return err
 		}
-		return c.JSON(http.StatusOK, response)
-	}
-}
-
-func searchUsers(ctx context.Context, db *sqlx.DB, viewer string, input searchUsersRequest) (searchUsersResponse, error) {
-	// 絞り込みに使う列だけを全件取り、当たった人（最大 51 人）だけ全部の列を取り直す。
-	// 元は active なユーザー全員の全部の列を毎回読んでいた
-	var candidates []struct {
-		ID          string `db:"id"`
-		Username    string `db:"username"`
-		DisplayName string `db:"display_name"`
-	}
-	if err := db.SelectContext(ctx, &candidates, `SELECT id, username, display_name FROM users WHERE status='active' AND id<>$1 AND ($2='' OR (username,id)>($2,$3)) ORDER BY username, id`, viewer, input.BeforeUsername, input.BeforeID); err != nil {
-		return searchUsersResponse{}, err
-	}
-	blocked, err := getBlockedUserIDs(ctx, db, viewer)
-	if err != nil {
-		return searchUsersResponse{}, err
-	}
-	query := normalizeSearchText(input.Q)
-	matchedIDs := make([]string, 0, 51)
-	for _, candidate := range candidates {
-		if !strings.Contains(cachedNormalizeSearchText(candidate.Username), query) && !strings.Contains(cachedNormalizeSearchText(candidate.DisplayName), query) {
-			continue
+		query := normalizeSearchText(input.Q)
+		items := make([]relationshipUserResponse, 0)
+		for _, user := range users {
+			if !strings.Contains(normalizeSearchText(user.Username), query) && !strings.Contains(normalizeSearchText(user.DisplayName), query) {
+				continue
+			}
+			if blocked[user.ID] {
+				continue
+			}
+			if err := user.setImageKey(); err != nil {
+				return err
+			}
+			if user.AccountType != "certified_public" {
+				user.Bio = ""
+			}
+			items = append(items, newRelationshipUserResponse(user))
+			if len(items) == 51 {
+				break
+			}
 		}
-		if blocked[candidate.ID] {
-			continue
+		hasMore := len(items) > 50
+		if hasMore {
+			items = items[:50]
 		}
-		matchedIDs = append(matchedIDs, candidate.ID)
-		if len(matchedIDs) == 51 {
-			break
-		}
+		return c.JSON(http.StatusOK, searchUsersResponse{Items: items, HasMore: hasMore})
 	}
-	var users []User
-	if len(matchedIDs) > 0 {
-		if err := db.SelectContext(ctx, &users, `SELECT `+strings.Join(userColumns, ", ")+` FROM users WHERE id = ANY($1) AND status='active'`, matchedIDs); err != nil {
-			return searchUsersResponse{}, err
-		}
-	}
-	usersByID := make(map[string]User, len(users))
-	for _, user := range users {
-		usersByID[user.ID] = user
-	}
-	items := make([]relationshipUserResponse, 0, len(matchedIDs))
-	for _, id := range matchedIDs {
-		// 2 回の問い合わせの間に退会した人は除く
-		user, ok := usersByID[id]
-		if !ok {
-			continue
-		}
-		if err := user.setImageKey(); err != nil {
-			return searchUsersResponse{}, err
-		}
-		if user.AccountType != "certified_public" {
-			user.Bio = ""
-		}
-		items = append(items, newRelationshipUserResponse(user))
-	}
-	hasMore := len(items) > 50
-	if hasMore {
-		items = items[:50]
-	}
-	return searchUsersResponse{Items: items, HasMore: hasMore}, nil
 }
 
 type getUserRequest struct {
