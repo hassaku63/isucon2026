@@ -1,12 +1,12 @@
 # 今の状態と次の候補（引き継ぎ用）
 
-最終更新: 2026-10-31 13:30 JST。新しいセッションはまずここと CLAUDE.md を読む。スコアの推移は [log.md](log.md)。
+最終更新: 2026-10-31 14:00 JST。新しいセッションはまずここと CLAUDE.md を読む。スコアの推移は [log.md](log.md)。
 
 ## 今の状態
 
-- 最高スコア: **16891**（12:57、PR #10 の後）。直近の pass は 16563（13:08、PR #12 の後）
-- main = サーバーにデプロイ済み: `0324145`（PR #16 まで）。次のベンチは pass する想定（PR #16 で、pass が確認できている有効期限の設定に戻した）
-- 入っている改善: インデックス（#2）、pprof（#4）、DB 接続の使い回しと TLS なし（#8）、画像署名のキャッシュと HMAC の高速化、exp の 60 秒切り上げ（#10）、投稿時の posting_windows の行ロックを FOR SHARE（#12）
+- 最高スコア: **22067**（13:50、PR #18 の後）。これが直近の pass
+- main = サーバーにデプロイ済み: `1407f9e`（PR #18 まで）
+- 入っている改善: インデックス（#2）、pprof（#4）、DB 接続の使い回しと TLS なし（#8）、画像署名のキャッシュと HMAC の高速化、exp の 60 秒切り上げ（#10）、投稿時の posting_windows の行ロックを FOR SHARE（#12）、アップロード画像の検証で画素を復元しない（#18、`internal/jpegcheck`）
 - 動いているバックグラウンドの処理: なし（監視もサブエージェントも止めてある）
 
 ## ベンチマーカーについて分かったこと（PR のコメントが一次情報）
@@ -21,15 +21,15 @@
 
 ## 次の候補（未着手）
 
-asia1 の CPU が最大のボトルネック（13:08 のベンチで idle 3%）。プロファイル（`logs/bench-20261031-125718/isucon2026-asia1/cpu.pprof`）の内訳:
+asia1 の CPU が最大のボトルネック（13:50 のベンチでピーク idle 2〜4%、asia の参加者 154 人）。プロファイル（`logs/bench-20261031-135047/isucon2026-asia1/cpu.pprof`）の内訳:
 
 | 候補 | 根拠 | メモ |
 |---|---|---|
-| Memories の一覧（`listMemories`、cum 25%） | CPU プロファイル | 1 回で最大 51 件 + RealMoji。署名以外に何が重いかは未調査 |
-| JPEG の展開（`jpeg.Decode`、cum 29%） | CPU プロファイル | アップロード画像の検証（壊れていないか、サイズ上限）。画像に重複はほぼないのでキャッシュは効かない。`DecodeConfig` にすると壊れた画像の判定が変わるおそれ |
-| 画像署名（`imageSignature`、cum 34%） | CPU プロファイル | 残りはベンチマーカーが作った URL の検証と、各画像の初回の署名。exp の刻みは 60 秒より伸ばせない |
-| アクションログを `ISUREAL_LOG_LEVEL=info` にする | 全リクエストを journald に書いている | guard の BAN 判定に必要なログは info 以上で出る。`infra/files/*/home/isucon/env.sh` |
-| #7 の残り: `LOCK TABLE users`（期間の開始・登録）、users の行ロック | issue #7 の本文（#12 で閉じたが、FOR SHARE 以外は未対応） | 13:08 のベンチでロック待ち（1 秒以上）は 45 件 |
+| **ユーザー検索**（`searchUsersHandler`、cum 15%） | CPU プロファイル。DB でも 448 回で 224 万行、28.5 秒 | active なユーザーを毎回全件（全列）取って Go で絞り込んでいる（`user_read_api.go:45`）。案: 絞り込みは id・username・display_name の 3 列で行い、当たった 51 件以下だけを全列で取り直す。`normalizeSearchText` は文字列だけで決まるのでメモ化してよい |
+| 画像署名（`imageSignature`、cum 35%） | CPU プロファイル | Memories の RealMoji、エクスポート、フィード。exp の刻みは 60 秒より伸ばせない（上限 1〜15 分）。切り下げ（下限）は未確認で、試すには FAIL のおそれがある実験が要る。sha256 の本体以外（状態の復元など）は約 25% |
+| PostgreSQL の `shared_buffers`（128MB のまま） | 画像取得 97 秒、ディスクから 33 万ブロック。asia2 はメモリ 3GB | `infra/files/db/etc/postgresql/16/main/conf.d/`。設定を変えるだけ |
+| #7 の残り: 関係の操作の users の行ロック、`LOCK TABLE users` | 行ロック 125 秒（4567 回）、LOCK TABLE 58 秒（198 回）。1 秒以上の待ち 36 件 | asia1 の CPU が詰まると、ロックを持つ時間も延びる。CPU を減らしてから測り直す |
+| アクションログを `ISUREAL_LOG_LEVEL=info` にする | pidstat では journald・guard を合わせてもアプリの CPU の数 % | 効果は小さい |
 | europe / america の RTT 100ms × クエリ回数 | エンドポイントの平均がどれも asia1 より約 1 秒遅い | DB の複製やキャッシュはサーバー間の新しい経路になるので、作る前にユーザーに確認（Clar #55） |
 | SSE（`/api/notifications`）が nginx の初期設定で 60 秒で切れる | nginx の error.log | 通知の受信は 1 点 |
 | `PUT /api/me/profile-image` の 502、攻撃のログイン（`evil_login_*`）の 500 | アクセスログ、アプリのログ | 原因は未調査 |
