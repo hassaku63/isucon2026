@@ -23,32 +23,49 @@
       loop: "{{ managed_files }}"
       loop_control:
         label: "{{ item.path }}"
-      notify: "{{ item.notify }}"
+      register: deployed
 
-  handlers:
-    - name: validate nginx
-      listen: reload nginx
+    # loop の notify はテンプレートを最後の item で評価してしまうので、変わったファイルから自分で決める
+    - name: decide what to reload or restart
+      ansible.builtin.set_fact:
+        actions: "{{ deployed.results | selectattr('changed') | map(attribute='item.notify') | unique | list }}"
+
+    - name: show actions
+      ansible.builtin.debug:
+        var: actions
+
+    - name: validate nginx config
+      when: "'reload nginx' in actions"
       ansible.builtin.command: nginx -t
       changed_when: false
+      check_mode: false
 
-    - name: reload nginx service
-      listen: reload nginx
+    - name: reload nginx
+      when: "'reload nginx' in actions"
       ansible.builtin.systemd_service:
         name: nginx
         state: reloaded
 
-    - name: restart isureal-go service
-      listen: restart isureal-go
+    - name: restart isureal-go
+      when: "'restart isureal-go' in actions"
       ansible.builtin.systemd_service:
         name: isureal-go
         state: restarted
         daemon_reload: true
 
-    - name: restart postgresql service
-      listen: restart postgresql
+    - name: restart postgresql
+      when: "'restart postgresql' in actions"
       ansible.builtin.systemd_service:
         name: postgresql@16-main
         state: restarted
+
+    # reset.sql は拡張に触らないので、一度作れば初期化後も残る
+    - name: enable pg_stat_statements
+      when: "'db' in group_names"
+      become_user: postgres
+      ansible.builtin.command: psql -d isureal -Atc "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"
+      register: pgss
+      changed_when: "'already exists' not in pgss.stderr"
 
 - hosts: all
   become: true

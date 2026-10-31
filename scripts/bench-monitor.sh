@@ -31,6 +31,7 @@ start() {
   done
   wait
   ssh -T "$DB" "$PGSTAT > $REMOTE/pg_stat_tables.before.tsv"
+  ssh -T "$DB" "sudo -u postgres psql -d isureal -Atc \"select pg_stat_statements_reset()\" >/dev/null 2>&1 || echo 'pg_stat_statements is not enabled' >&2"
   # DB: 1秒ごとに接続の状態と実行中クエリを採る
   ssh -T "$DB" "cd $REMOTE && cat > pg_activity.sh <<'EOS'
 end=\$((SECONDS+$MAX))
@@ -63,7 +64,8 @@ stop() {
   done
   for h in $APPS; do
     (
-      ssh -T "$h" "sudo awk -v since=\"\$(date -u -d '$since' '+%d/%b/%Y:%H:%M:%S')\" '{t=substr(\$4,2)} t>=since' /var/log/nginx/access.log" > "$out/$h/access.log"
+      # JSON 形式（{"time":"2026-10-31T02:02:23+00:00",...）の行だけを、先頭の時刻で切り出す
+      ssh -T "$h" "sudo awk -v since=\"\$(date -u -d '$since' '+%Y-%m-%dT%H:%M:%S')\" '/^\\{/ && substr(\$0,10,19)>=since' /var/log/nginx/access.log" > "$out/$h/access.log"
       ssh -T "$h" "sudo awk -v since=\"\$(date -u -d '$since' '+%Y/%m/%d %H:%M:%S')\" 'substr(\$0,1,19)>=since' /var/log/nginx/error.log" > "$out/$h/nginx-error.log"
       ssh -T "$h" "journalctl -u isureal-go --since '$since' --utc --no-pager -q -o short-iso" > "$out/$h/app.log"
       ssh -T "$h" "journalctl -u isureal-guard --since '$since' --utc --no-pager -q -o short-iso" > "$out/$h/guard.log"
@@ -72,9 +74,11 @@ stop() {
   (
     ssh -T "$DB" "sudo awk -v since='$since' 'substr(\$0,1,19)>=since' /var/log/postgresql/postgresql-16-main.log" > "$out/$DB/postgresql.log"
     ssh -T "$DB" "$PGSTAT" > "$out/$DB/pg_stat_tables.after.tsv"
+    ssh -T "$DB" "sudo -u postgres psql -d isureal -AF \$'\\t' -c \"select calls, round(total_exec_time::numeric,1) as total_ms, round(mean_exec_time::numeric,2) as mean_ms, rows, shared_blks_hit, shared_blks_read, left(regexp_replace(query, '\\s+', ' ', 'g'), 400) as query from pg_stat_statements where dbid = (select oid from pg_database where datname='isureal') order by total_exec_time desc limit 100\"" > "$out/$DB/pg_stat_statements.tsv" 2>&1
   ) &
   wait
   rm -f "$STATE"
+  python3 -I "$ROOT/scripts/analyze.py" "$out"
   echo "done: $out"
 }
 
