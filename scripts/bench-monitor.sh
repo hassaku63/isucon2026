@@ -10,6 +10,8 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 STATE=$ROOT/logs/.bench-monitor.state
 REMOTE=/tmp/benchmon
 MAX=900
+# CPU プロファイルの長さ（秒）。ベンチは開始から 2 分半ほどで終わる
+PROFILE_SECONDS=${PROFILE_SECONDS:-150}
 PGSTAT="sudo -u postgres psql -d isureal -AtF \$'\t' -c \"select relname, seq_scan, seq_tup_read, idx_scan, n_tup_ins, n_tup_upd, n_tup_del from pg_stat_user_tables order by relname\""
 
 start() {
@@ -28,6 +30,11 @@ start() {
       (nohup timeout $MAX vmstat -t 1 > vmstat.txt 2>&1 &) &&
       (nohup timeout $MAX pidstat -u -r -h 5 > pidstat.txt 2>&1 &) &&
       (nohup timeout $MAX sar -n DEV 5 > sar-net.txt 2>&1 &)" &
+  done
+  wait
+  # アプリの CPU プロファイル（pprof、127.0.0.1:6060）
+  for h in $APPS; do
+    ssh -T "$h" "cd $REMOTE && (nohup curl -sS -o cpu.pprof 'http://127.0.0.1:6060/debug/pprof/profile?seconds=$PROFILE_SECONDS' > curl-pprof.log 2>&1 &)" &
   done
   wait
   ssh -T "$DB" "$PGSTAT > $REMOTE/pg_stat_tables.before.tsv"
@@ -55,6 +62,11 @@ stop() {
 
   for h in $APPS $DB; do
     ssh -T "$h" "pkill -u isucon -f '^timeout $MAX ' ; pkill -u isucon -f 'bash pg_activity.sh'; true" &
+  done
+  wait
+  # CPU プロファイルは途中で止めると壊れるので、取り終わるのを待つ
+  for h in $APPS; do
+    ssh -T "$h" "for i in \$(seq 1 $PROFILE_SECONDS); do pgrep -u isucon -f 'debug/pprof/profile' >/dev/null || break; sleep 1; done" &
   done
   wait
 
