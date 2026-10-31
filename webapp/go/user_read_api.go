@@ -86,12 +86,18 @@ func searchUsers(ctx context.Context, db *sqlx.DB, viewer string, input searchUs
 		Username    string `db:"username"`
 		DisplayName string `db:"display_name"`
 	}
-	if err := db.SelectContext(ctx, &candidates, `SELECT id, username, display_name FROM users WHERE status='active' AND id<>$1 AND ($2='' OR (username,id)>($2,$3)) ORDER BY username, id`, viewer, input.BeforeUsername, input.BeforeID); err != nil {
-		return searchUsersResponse{}, err
+	// 候補とブロックの一覧は互いに依存しないので並列に引く（往復 3 回 → 2 回）。エラーは元の順に見る
+	var blocked map[string]bool
+	var blockedErr error
+	var wg sync.WaitGroup
+	wg.Go(func() { blocked, blockedErr = getBlockedUserIDs(ctx, db, viewer) })
+	candidatesErr := db.SelectContext(ctx, &candidates, `SELECT id, username, display_name FROM users WHERE status='active' AND id<>$1 AND ($2='' OR (username,id)>($2,$3)) ORDER BY username, id`, viewer, input.BeforeUsername, input.BeforeID)
+	wg.Wait()
+	if candidatesErr != nil {
+		return searchUsersResponse{}, candidatesErr
 	}
-	blocked, err := getBlockedUserIDs(ctx, db, viewer)
-	if err != nil {
-		return searchUsersResponse{}, err
+	if blockedErr != nil {
+		return searchUsersResponse{}, blockedErr
 	}
 	query := normalizeSearchText(input.Q)
 	matchedIDs := make([]string, 0, 51)
@@ -153,23 +159,30 @@ func getUserHandler(h *HandlerContext) echo.HandlerFunc {
 		}
 		ctx := c.Request().Context()
 		viewer := GetSession(c).UserID
+		// 3 本の読み取りは互いに依存しない（user.ID は WHERE id = $1 で引いた input.UserID と同じ）ので並列に引く
+		// （往復 3 回 → 1 回）。エラーと判定は元の順に見る
+		var blocked bool
+		var friends []string
+		var blockedErr, friendsErr error
+		var wg sync.WaitGroup
+		wg.Go(func() { blocked, blockedErr = isBlocked(ctx, h.DB, viewer, input.UserID) })
+		wg.Go(func() { friends, friendsErr = getFriendIDs(ctx, h.DB, viewer) })
 		user, err := getUser(ctx, h.DB, input.UserID)
+		wg.Wait()
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewAPIError(http.StatusNotFound, "relationship_not_found")
 		}
 		if err != nil {
 			return err
 		}
-		blocked, err := isBlocked(ctx, h.DB, viewer, user.ID)
-		if err != nil {
-			return err
+		if blockedErr != nil {
+			return blockedErr
 		}
 		if blocked {
 			return NewAPIError(http.StatusNotFound, "relationship_not_found")
 		}
-		friends, err := getFriendIDs(ctx, h.DB, viewer)
-		if err != nil {
-			return err
+		if friendsErr != nil {
+			return friendsErr
 		}
 		if user.AccountType != "certified_public" && !slices.Contains(friends, user.ID) {
 			user.Bio = ""
