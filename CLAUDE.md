@@ -4,6 +4,7 @@
 
 ## 最初に読むもの
 
+- [docs/status.md](docs/status.md) — **今の状態、ベンチマーカーについて分かったこと、次の候補**（引き継ぎ用。作業の区切りで更新する）
 - [docs/regulation.md](docs/regulation.md) — レギュレーション要約（禁止事項・失格条件）
 - [docs/manual.md](docs/manual.md) — 当日マニュアルの要点（レギュレーションより優先）
 - [docs/environment.md](docs/environment.md) — インスタンス構成とネットワーク
@@ -51,3 +52,14 @@ ssh: `isucon2026-asia1` / `isucon2026-europe1` / `isucon2026-america1`（アプ�
   - 次の issue / PR につながる観測を書く
 - ベンチの記録やドキュメントの更新（`docs/`）は main に直接 commit してよい
 - issue / PR では、呼び出し関係（pprof）、サーバー間の往復、ロックの待ち合いが論点のときだけ mermaid で図を描く（sequenceDiagram / flowchart）。数字は図の中に書く
+
+## ベンチを回すときの手順
+
+ベンチはユーザーがポータルから Enqueue する。
+
+1. ユーザーが「回す」と言ったら `make bench-start`（最後の本番ベンチだけ `PROFILE_SECONDS=0 make bench-start`）
+2. Monitor ツールで `scripts/bench-watch.sh` を動かし（timeout 15 分）、15 秒ごとの様子を短く伝える。初期データの検証の段階（開始から 20 秒前後）でリクエストが止まったら FAIL の可能性が高い
+3. ユーザーが stdout を貼ったら、Monitor を止めて `make bench-stop`（CPU プロファイルが取り終わるまで最大 150 秒待つ）。`logs/bench-<時刻>/summary.md` ができる
+4. 前のベンチとの比較は `scripts/compare.py logs/bench-<前> logs/bench-<後>`。CPU は `go tool pprof -top -cum logs/bench-*/isucon2026-asia1/cpu.pprof`
+5. 直前にマージした PR に結果をコメントする（stdout はそのまま）。`docs/log.md` に 1 行追記し、必要なら `docs/status.md` を更新する
+6. FAIL したら、元に戻す PR を作ってマージ・デプロイする（ベンチは最後の 1 回だけが最終スコアになるので、FAIL 自体は失格ではない）
