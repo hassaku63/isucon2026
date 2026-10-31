@@ -6,6 +6,7 @@ usage: scripts/analyze.py logs/bench-YYYYmmdd-HHMMSS
 import collections
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -113,6 +114,21 @@ def statements_summary(path):
     return lines
 
 
+def pprof_summary(path):
+    """go tool pprof で関数ごとの CPU 上位を出す（flat と cum）"""
+    out = []
+    for flag, label in (("-top", "flat"), ("-cum", "cum")):
+        args = ["go", "tool", "pprof", "-top", "-nodecount=25"] + ([flag] if flag == "-cum" else []) + [str(path)]
+        try:
+            result = subprocess.run(args, capture_output=True, text=True, timeout=120)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return [f"（go tool pprof を実行できなかった: {e}）"]
+        if result.returncode != 0:
+            return ["（go tool pprof が失敗: " + result.stderr.strip()[:200] + "）"]
+        out += [f"{label} の上位:", "", "```", result.stdout.strip(), "```", ""]
+    return out
+
+
 def main():
     bench = Path(sys.argv[1])
     out = ["# ベンチ要約: " + bench.name, ""]
@@ -128,6 +144,11 @@ def main():
         access = bench / host / "access.log"
         if access.exists():
             out += [f"## nginx: {host}（合計時間の降順）", ""] + access_summary(access) + [""]
+
+    for host in APPS:
+        profile = bench / host / "cpu.pprof"
+        if profile.exists() and profile.stat().st_size > 0:
+            out += [f"## CPU プロファイル: {host}", ""] + pprof_summary(profile)
 
     statements = bench / DB / "pg_stat_statements.tsv"
     if statements.exists():
