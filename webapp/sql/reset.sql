@@ -1,5 +1,9 @@
 SET session_replication_role = replica;
 
+-- 001-schema.sql に後から足したインデックス。initialize では schema が流れないので、ここで作る（あれば何もしない）
+CREATE INDEX IF NOT EXISTS realmojis_image_id ON realmojis(image_id);
+CREATE INDEX IF NOT EXISTS friendships_user_high_id ON friendships(user_high_id);
+
 BEGIN;
 
 TRUNCATE ip_bans, login_sessions, administrator_sessions, friendships, friend_requests, follows, block_relations;
