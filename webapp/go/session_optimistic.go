@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -37,9 +39,18 @@ func (w *bufferedResponseWriter) WriteHeader(status int) {
 	}
 }
 
+// 仮のセッションで先に走らせてよい書き込み。どれも書き込みは 1 つのトランザクションの中だけで、
+// COMMIT の前に confirmSessionBeforeCommit で確認の結果を待つ（確認が通らなければ ROLLBACK して元どおりに処理し直す）
+var optimisticWriteRoutes = map[string]bool{
+	"POST /api/posts":                              true,
+	"POST /api/friend-requests":                    true,
+	"POST /api/friend-requests/:requestId/:action": true,
+	"PUT /api/follows/:userId":                     true,
+}
+
 func canRunOptimistically(c *echo.Context) bool {
 	if c.Request().Method != http.MethodGet {
-		return false
+		return optimisticWriteRoutes[c.Request().Method+" "+c.Path()]
 	}
 	// 通知は long poll で途中で Flush する
 	switch c.Path() {
@@ -47,6 +58,31 @@ func canRunOptimistically(c *echo.Context) bool {
 		return false
 	}
 	return true
+}
+
+type sessionCheck struct {
+	done    chan struct{}
+	session *Session
+	err     error
+	cached  *Session
+}
+
+var errSessionChanged = errors.New("session changed")
+
+// 仮のセッションで走っている書き込みは、COMMIT の前にこれを呼ぶ。DB での確認の結果が仮のセッションと違えばエラーを返す
+func confirmSessionBeforeCommit(c *echo.Context) error {
+	check, ok := c.Get("sessionCheck").(*sessionCheck)
+	if !ok || check == nil {
+		return nil
+	}
+	<-check.done
+	if check.err != nil {
+		return check.err
+	}
+	if !sameSession(check.session, check.cached) {
+		return errSessionChanged
+	}
+	return nil
 }
 
 func sessionTokenHash(c *echo.Context) (string, bool) {
@@ -64,14 +100,21 @@ func sameSession(a, b *Session) bool {
 
 // 本体を仮のセッションで走らせる。確認の結果が同じなら応答を返して true、違えば何も書かずに false
 func runWithOptimisticSession(c *echo.Context, h *HandlerContext, cached *Session, next echo.HandlerFunc) (bool, *Session, error, error) {
-	type result struct {
-		session *Session
-		err     error
+	isWrite := c.Request().Method != http.MethodGet
+	var body []byte
+	if isWrite {
+		// やり直すときにもう一度読めるように、本文を先に読んでおく
+		b, err := io.ReadAll(c.Request().Body)
+		if err != nil {
+			return true, nil, nil, err
+		}
+		body = b
+		c.Request().Body = io.NopCloser(bytes.NewReader(body))
 	}
-	done := make(chan result, 1)
+	check := &sessionCheck{done: make(chan struct{}), cached: cached}
 	go func() {
-		s, err := getSessionFromHeader(c, h.DB)
-		done <- result{s, err}
+		check.session, check.err = getSessionFromHeader(c, h.DB)
+		close(check.done)
 	}()
 
 	orig := c.Response()
@@ -79,15 +122,22 @@ func runWithOptimisticSession(c *echo.Context, h *HandlerContext, cached *Sessio
 	c.SetResponse(echo.NewResponse(buf, c.Logger()))
 	provisional := *cached
 	c.Set("session", &provisional)
+	if isWrite {
+		c.Set("sessionCheck", check)
+	}
 	handlerErr := next(c)
 	c.SetResponse(orig)
-
-	r := <-done
-	if r.err != nil {
-		return false, nil, r.err, nil
+	if isWrite {
+		c.Set("sessionCheck", nil)
+		c.Request().Body = io.NopCloser(bytes.NewReader(body))
 	}
-	if !sameSession(r.session, cached) {
-		return false, r.session, nil, nil
+
+	<-check.done
+	if check.err != nil {
+		return false, nil, check.err, nil
+	}
+	if !sameSession(check.session, cached) {
+		return false, check.session, nil, nil
 	}
 	for k, v := range buf.header {
 		orig.Header()[k] = v

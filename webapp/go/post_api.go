@@ -147,6 +147,9 @@ func createPostHandler(h *HandlerContext) echo.HandlerFunc {
 			location.Kind, location.Latitude, location.Longitude, location.Locality, postedAt, imageData); err != nil {
 			return err
 		}
+		if err := confirmSessionBeforeCommit(c); err != nil {
+			return err
+		}
 		if err := tx.Commit(); err != nil {
 			return err
 		}

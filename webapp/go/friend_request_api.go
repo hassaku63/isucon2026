@@ -78,6 +78,9 @@ func createFriendRequestHandler(h *HandlerContext) echo.HandlerFunc {
 				return err
 			}
 		}
+		if err := confirmSessionBeforeCommit(c); err != nil {
+			return err
+		}
 		if err := tx.Commit(); err != nil {
 			return err
 		}
@@ -158,6 +161,9 @@ func transitionFriendRequestHandler(h *HandlerContext) echo.HandlerFunc {
 			err = tx.GetContext(ctx, &request, updateRequest, request.ID, status)
 		}
 		if err != nil {
+			return err
+		}
+		if err := confirmSessionBeforeCommit(c); err != nil {
 			return err
 		}
 		if err := tx.Commit(); err != nil {

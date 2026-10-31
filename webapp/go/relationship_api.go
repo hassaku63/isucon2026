@@ -68,6 +68,9 @@ func followHandler(h *HandlerContext) echo.HandlerFunc {
 		} else if n == 0 {
 			return NewAPIError(http.StatusConflict, "relationship_conflict")
 		}
+		if err := confirmSessionBeforeCommit(c); err != nil {
+			return err
+		}
 		if err := tx.Commit(); err != nil {
 			return err
 		}
