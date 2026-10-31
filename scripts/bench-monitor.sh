@@ -14,6 +14,21 @@ MAX=900
 PROFILE_SECONDS=${PROFILE_SECONDS:-150}
 PGSTAT="sudo -u postgres psql -d isureal -AtF \$'\t' -c \"select relname, seq_scan, seq_tup_read, idx_scan, n_tup_ins, n_tup_upd, n_tup_del from pg_stat_user_tables order by relname\""
 
+# DB の I/O の内訳（開始時と停止時に採って差を見る）。psql -f で流すため、SQL はファイルにして送る
+db_snapshot() {
+  local name=$1
+  ssh -T "$DB" "cat > $REMOTE/snap.sql && sudo -u postgres psql -d isureal -AF \$'\\t' -f $REMOTE/snap.sql > $REMOTE/pg_snap.$name.tsv 2>&1; grep -E '^(MemFree|Cached|Dirty|Writeback|Shmem):' /proc/meminfo > $REMOTE/meminfo.$name.txt" <<'EOS'
+\echo '## pg_stat_io'
+select backend_type, object, context, reads, round(read_time::numeric,1) as read_ms, writes, round(write_time::numeric,1) as write_ms, extends, hits, evictions, fsyncs from pg_stat_io where reads > 0 or writes > 0 or hits > 0 order by backend_type, object, context;
+\echo '## pg_stat_database'
+select blks_read, blks_hit, round(blk_read_time::numeric,1) as blk_read_ms, round(blk_write_time::numeric,1) as blk_write_ms, temp_files, temp_bytes, xact_commit, xact_rollback, deadlocks from pg_stat_database where datname = 'isureal';
+\echo '## pg_stat_bgwriter'
+select checkpoints_timed, checkpoints_req, round(checkpoint_write_time::numeric) as ckpt_write_ms, round(checkpoint_sync_time::numeric) as ckpt_sync_ms, buffers_checkpoint, buffers_clean, buffers_backend, buffers_alloc from pg_stat_bgwriter;
+\echo '## pg_statio_user_tables'
+select relname, heap_blks_read, heap_blks_hit, idx_blks_read, idx_blks_hit, coalesce(toast_blks_read,0) as toast_blks_read, coalesce(toast_blks_hit,0) as toast_blks_hit from pg_statio_user_tables where heap_blks_read + coalesce(idx_blks_read,0) + coalesce(toast_blks_read,0) > 0 order by heap_blks_read + coalesce(idx_blks_read,0) + coalesce(toast_blks_read,0) desc limit 40;
+EOS
+}
+
 start() {
   if [ -f "$STATE" ]; then
     echo "already running: $(cat "$STATE")" >&2
@@ -32,6 +47,8 @@ start() {
       (nohup timeout $MAX sar -n DEV 5 > sar-net.txt 2>&1 &)" &
   done
   wait
+  # DB: ディスクの読み書きの待ち時間（r_await / w_await）と、プロセスごとの I/O
+  ssh -T "$DB" "cd $REMOTE && (nohup timeout $MAX iostat -dxmt 1 > iostat.txt 2>&1 &) && (nohup timeout $MAX pidstat -d -h 5 > pidstat-io.txt 2>&1 &)"
   # アプリの CPU プロファイル（pprof、127.0.0.1:6060）。PROFILE_SECONDS=0 なら取らない
   if [ "$PROFILE_SECONDS" -gt 0 ]; then
     for h in $APPS; do
@@ -40,6 +57,7 @@ start() {
     wait
   fi
   ssh -T "$DB" "$PGSTAT > $REMOTE/pg_stat_tables.before.tsv"
+  db_snapshot before
   ssh -T "$DB" "sudo -u postgres psql -d isureal -Atc \"select pg_stat_statements_reset()\" >/dev/null 2>&1 || echo 'pg_stat_statements is not enabled' >&2"
   # DB: 1秒ごとに接続の状態と実行中クエリを採る
   ssh -T "$DB" "cd $REMOTE && cat > pg_activity.sh <<'EOS'
@@ -72,9 +90,10 @@ stop() {
   done
   wait
 
+  db_snapshot after
   for h in $APPS $DB; do
     mkdir -p "$out/$h"
-    rsync -a "$h:$REMOTE/" "$out/$h/" --exclude pg_activity.sh &
+    rsync -a "$h:$REMOTE/" "$out/$h/" --exclude pg_activity.sh --exclude snap.sql &
   done
   for h in $APPS; do
     (
@@ -88,7 +107,7 @@ stop() {
   (
     ssh -T "$DB" "sudo awk -v since='$since' 'substr(\$0,1,19)>=since' /var/log/postgresql/postgresql-16-main.log" > "$out/$DB/postgresql.log"
     ssh -T "$DB" "$PGSTAT" > "$out/$DB/pg_stat_tables.after.tsv"
-    ssh -T "$DB" "sudo -u postgres psql -d isureal -AF \$'\\t' -c \"select calls, round(total_exec_time::numeric,1) as total_ms, round(mean_exec_time::numeric,2) as mean_ms, rows, shared_blks_hit, shared_blks_read, left(regexp_replace(query, '\\s+', ' ', 'g'), 400) as query from pg_stat_statements where dbid = (select oid from pg_database where datname='isureal') order by total_exec_time desc limit 100\"" > "$out/$DB/pg_stat_statements.tsv" 2>&1
+    ssh -T "$DB" "sudo -u postgres psql -d isureal -AF \$'\\t' -c \"select calls, round(total_exec_time::numeric,1) as total_ms, round(mean_exec_time::numeric,2) as mean_ms, rows, shared_blks_hit, shared_blks_read, left(regexp_replace(query, '\\s+', ' ', 'g'), 400) as query, round(blk_read_time::numeric,1) as blk_read_ms, round(blk_write_time::numeric,1) as blk_write_ms, temp_blks_written from pg_stat_statements where dbid = (select oid from pg_database where datname='isureal') order by total_exec_time desc limit 100\"" > "$out/$DB/pg_stat_statements.tsv" 2>&1
   ) &
   wait
   rm -f "$STATE"
