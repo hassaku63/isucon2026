@@ -3,6 +3,7 @@ package isureal
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -113,13 +114,27 @@ func loadMemoryInteractions(ctx context.Context, db sqlx.QueryerContext, items [
 		itemByPostID[items[i].ID] = &items[i]
 	}
 
+	// RealMoji とコメントは互いに依存しないので並列に引く（往復 2 回 → 1 回）
 	query, args, err := sqlx.In(`AND r.post_id IN (?) ORDER BY r.created_at DESC, r.id DESC`, postIDs)
 	if err != nil {
 		return err
 	}
-	reactions, err := selectCurrentRealMojis(ctx, db, sqlx.Rebind(sqlx.DOLLAR, query), args...)
+	var wg sync.WaitGroup
+	var reactions []RealMojiWithReactor
+	var reactionsErr error
+	reactionsQuery, reactionsArgs := sqlx.Rebind(sqlx.DOLLAR, query), args
+	wg.Go(func() {
+		reactions, reactionsErr = selectCurrentRealMojis(ctx, db, reactionsQuery, reactionsArgs...)
+	})
+	query, args, err = sqlx.In(`AND c.post_id IN (?) ORDER BY c.created_at, c.id`, postIDs)
 	if err != nil {
+		wg.Wait()
 		return err
+	}
+	comments, commentsErr := selectCommentsWithAuthor(ctx, db, sqlx.Rebind(sqlx.DOLLAR, query), args...)
+	wg.Wait()
+	if reactionsErr != nil {
+		return reactionsErr
 	}
 	for _, reaction := range reactions {
 		item := itemByPostID[reaction.PostID]
@@ -127,14 +142,8 @@ func loadMemoryInteractions(ctx context.Context, db sqlx.QueryerContext, items [
 			item.RealMojis = append(item.RealMojis, newRealMojiResponse(reaction.RealMoji, reaction.Reactor))
 		}
 	}
-
-	query, args, err = sqlx.In(`AND c.post_id IN (?) ORDER BY c.created_at, c.id`, postIDs)
-	if err != nil {
-		return err
-	}
-	comments, err := selectCommentsWithAuthor(ctx, db, sqlx.Rebind(sqlx.DOLLAR, query), args...)
-	if err != nil {
-		return err
+	if commentsErr != nil {
+		return commentsErr
 	}
 	for _, comment := range comments {
 		item := itemByPostID[comment.PostID]
