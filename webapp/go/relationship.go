@@ -39,7 +39,11 @@ func beginRelationshipTx(ctx context.Context, db *sqlx.DB, actor, target string)
 		tx.Rollback()
 		return nil, err
 	}
-	if len(lockedIDs) != 2 {
+	want := 2
+	if actor == target {
+		want = 1
+	}
+	if len(lockedIDs) != want {
 		tx.Rollback()
 		return nil, NewAPIError(http.StatusNotFound, "relationship_not_found")
 	}

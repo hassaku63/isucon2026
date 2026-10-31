@@ -79,29 +79,27 @@ func SessionMiddleware(handlerContext *HandlerContext, authRequired bool) echo.M
 }
 
 func InvalidateLoginSession(db *sqlx.DB, userID string, tokenHash string) error {
-	tx, err := db.Beginx()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+	// users の行のロックとセッションの無効化を 1 文（自動コミット）で行う。ロックはこの文の終わりまで持つ
+	var result struct {
+		Locked  int `db:"locked"`
+		Updated int `db:"updated"`
 	}
-	defer tx.Rollback()
-
-	var lockedUserID string
-	if err := tx.Get(&lockedUserID, `SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE`, userID); err != nil {
-		return fmt.Errorf("failed to lock user: %w", err)
-	}
-
-	if _, err := tx.Exec(`
-		UPDATE login_sessions
-		SET active = false, invalidated_at = clock_timestamp(), reason = 'logout'
-		WHERE user_id = $1 AND active = true AND token_hash = $2	
+	if err := db.Get(&result, `
+		WITH l AS (SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE),
+		u AS (
+			UPDATE login_sessions s
+			SET active = false, invalidated_at = clock_timestamp(), reason = 'logout'
+			FROM l
+			WHERE s.user_id = l.id AND s.active = true AND s.token_hash = $2
+			RETURNING 1
+		)
+		SELECT (SELECT count(*) FROM l) AS locked, (SELECT count(*) FROM u) AS updated
 	`, userID, tokenHash); err != nil {
 		return fmt.Errorf("failed to invalidate sessions: %w", err)
 	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
+	if result.Locked == 0 {
+		return fmt.Errorf("failed to lock user: %w", sql.ErrNoRows)
 	}
-
 	return nil
 }
 
@@ -124,33 +122,36 @@ func CreateLoginSession(db *sqlx.DB, userID string) (*Session, error) {
 }
 
 func createLoginSessionTx(ctx context.Context, tx *sqlx.Tx, userID string) (*Session, error) {
-	randomToken := uuid.NewString()
-	tokenHashBytes := sha256.Sum256([]byte(randomToken))
-	tokenHash := hex.EncodeToString(tokenHashBytes[:])
 	var lockedUserID string
 	if err := tx.GetContext(ctx, &lockedUserID, `SELECT id FROM users WHERE id = $1 AND status = 'active' FOR NO KEY UPDATE`, userID); err != nil {
 		return nil, fmt.Errorf("failed to lock user: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `
-  UPDATE login_sessions
-  SET active = false, invalidated_at = clock_timestamp(), reason = 'replaced'
-  WHERE user_id = $1 AND active = true
- `, userID); err != nil {
-		return nil, fmt.Errorf("failed to invalidate sessions: %w", err)
-	}
+	return createLoginSessionLockedTx(ctx, tx, userID)
+}
+
+// 呼び出し側が users の行を FOR NO KEY UPDATE でロックし、status = 'active' を確かめていること。
+// 既存のセッションの無効化・新しいセッションの追加・読み直しを 1 文にまとめる。
+// UPDATE と INSERT は同じスナップショットで動くので、UPDATE は今回追加する行を見ない
+func createLoginSessionLockedTx(ctx context.Context, tx *sqlx.Tx, userID string) (*Session, error) {
+	randomToken := uuid.NewString()
+	tokenHashBytes := sha256.Sum256([]byte(randomToken))
+	tokenHash := hex.EncodeToString(tokenHashBytes[:])
 	sessionID := uuid.NewString()
-	if _, err := tx.ExecContext(ctx, `
+	var session Session
+	if err := tx.GetContext(ctx, &session, `
+  WITH inv AS (
+    UPDATE login_sessions
+    SET active = false, invalidated_at = clock_timestamp(), reason = 'replaced'
+    WHERE user_id = $2 AND active = true
+  )
   INSERT INTO login_sessions (id, user_id, token_hash)
   VALUES ($1, $2, $3)
+  RETURNING user_id, token_hash, created_at
  `, sessionID, userID, tokenHash); err != nil {
 		return nil, fmt.Errorf("failed to insert session: %w", err)
 	}
-	session, err := getLoginSession(ctx, tx, sessionID)
-	if err != nil {
-		return nil, err
-	}
 	session.Token = randomToken
-	return session, nil
+	return &session, nil
 }
 
 func getLoginSession(ctx context.Context, db sqlx.QueryerContext, sessionID string) (*Session, error) {
