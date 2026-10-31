@@ -4,3 +4,4 @@
 |---|---|---|---|
 | 10:28 | 初期状態（Go 実装、変更なし）#813 | 3290 | 初回。スピード10倍賞の基準。asia1 約3400 req、europe1/america1 各約400 req。SSE が nginx でタイムアウト |
 | 11:02 | 初期状態のまま（計測付き） | 4533 | pass。DB の CPU が 100%。原因は realmojis の全件スキャン（画像取得）。グランプリまで残ったのは europe/america で各3人だけ。詳細 docs/bench/20261031-1102.md |
+| 11:24 | 計測用の設定を適用（nginx の JSON ログ、pg_stat_statements、スロークエリ 100ms 以上・ロック待ちのログ）。envcheck は4台とも通過 | - | `7042f82` |
