@@ -208,7 +208,8 @@ CREATE TABLE notifications (
   user_id varchar(36) NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   posting_window_id varchar(36) NOT NULL REFERENCES posting_windows(id) ON DELETE RESTRICT,
   created_at timestamptz NOT NULL,
-  UNIQUE(user_id,posting_window_id)
+  -- 投稿期間が先頭。1 回の通知の作成（同じ投稿期間の約 5000 行）がインデックスのひと続きの範囲に入る
+  UNIQUE(posting_window_id,user_id)
 );
 
 CREATE TABLE ip_bans (

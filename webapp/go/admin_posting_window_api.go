@@ -67,9 +67,16 @@ func openPostingWindowHandler(h *HandlerContext) echo.HandlerFunc {
   `, windowID, region, localDate, startsAt, startsAt.Add(time.Duration(seconds)*time.Second)); err != nil {
 			return err
 		}
+		// 通知の ID は、先頭 48 ビットを作成時刻（ミリ秒）にした UUID（v7 の形式）にする。
+		// ランダムな ID だと、1 回で約 5000 行を主キーのばらばらの位置に書き、そのたびにディスクを読んでいた。
+		// 時刻が先頭なら、同じ回の行は主キーのひと続きの範囲に入る
 		if _, err := tx.ExecContext(ctx, `
    INSERT INTO notifications (id, user_id, posting_window_id, created_at)
-   SELECT gen_random_uuid()::text, id, $2, $3 FROM users WHERE region = $1 AND status = 'active'
+   SELECT substr(ts, 1, 8) || '-' || substr(ts, 9, 4) || '-7' || substr(r, 16, 3) || substr(r, 19), id, $2, $3
+   FROM (
+     SELECT id, gen_random_uuid()::text AS r, lpad(to_hex((extract(epoch FROM $3::timestamptz) * 1000)::bigint), 12, '0') AS ts
+     FROM users WHERE region = $1 AND status = 'active'
+   ) u
   `, region, windowID, startsAt); err != nil {
 			return err
 		}
