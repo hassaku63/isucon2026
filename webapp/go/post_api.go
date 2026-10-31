@@ -316,6 +316,9 @@ func updatePostHandler(h *HandlerContext) echo.HandlerFunc {
 		if err := user.setImageKey(); err != nil {
 			return err
 		}
+		if err := confirmSessionBeforeCommit(c); err != nil {
+			return err
+		}
 		if err := tx.Commit(); err != nil {
 			return err
 		}
@@ -372,6 +375,9 @@ func deletePostHandler(h *HandlerContext) echo.HandlerFunc {
 			return NewAPIError(http.StatusConflict, "post_slot_unavailable")
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE posts SET deleted_at = clock_timestamp() WHERE id = $1`, post.ID); err != nil {
+			return err
+		}
+		if err := confirmSessionBeforeCommit(c); err != nil {
 			return err
 		}
 		if err := tx.Commit(); err != nil {

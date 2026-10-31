@@ -87,6 +87,9 @@ func createCommentHandler(h *HandlerContext) echo.HandlerFunc {
 		if err := user.setImageKey(); err != nil {
 			return err
 		}
+		if err := confirmSessionBeforeCommit(c); err != nil {
+			return err
+		}
 		if err := tx.Commit(); err != nil {
 			return err
 		}

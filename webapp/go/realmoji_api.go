@@ -114,6 +114,9 @@ func replaceRealMojiHandler(h *HandlerContext) echo.HandlerFunc {
 			RETURNING id, post_id, reactor_id, image_id, reaction_type, created_at, replaced_at, deleted_at`, imageID, actor, data, id, post.ID, input.ReactionType); err != nil {
 			return err
 		}
+		if err := confirmSessionBeforeCommit(c); err != nil {
+			return err
+		}
 		if err := tx.Commit(); err != nil {
 			return err
 		}

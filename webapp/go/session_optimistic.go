@@ -46,6 +46,10 @@ var optimisticWriteRoutes = map[string]bool{
 	"POST /api/friend-requests":                    true,
 	"POST /api/friend-requests/:requestId/:action": true,
 	"PUT /api/follows/:userId":                     true,
+	"POST /api/posts/:postId/realmojis":            true,
+	"POST /api/posts/:postId/comments":             true,
+	"PATCH /api/posts/:postId":                     true,
+	"DELETE /api/posts/:postId":                    true,
 }
 
 func canRunOptimistically(c *echo.Context) bool {
