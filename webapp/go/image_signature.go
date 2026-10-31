@@ -17,7 +17,7 @@ const imageSignatureIterations = 1000
 
 // 発行する URL の exp をこの秒数の倍数に切り上げる。同じ画像の URL は刻みの間ずっと同じ exp になり、
 // 署名のキャッシュが当たる。有効期限は最大でこの分だけ 24 時間より長くなる（運営の回答で、ベンチマーカーが許容する範囲なら可）
-const imageURLExpStep = 60
+const imageURLExpStep = 3600
 
 // 署名は (鍵, 画像 ID, exp) だけで決まり副作用もないので、計算結果を使い回す。上限を超えたら捨てて作り直す
 const imageSignatureCacheLimit = 500000
