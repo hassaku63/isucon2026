@@ -56,7 +56,7 @@ func followHandler(h *HandlerContext) echo.HandlerFunc {
 		// 2 人の行は beginRelationshipTx でロック済み（status = 'active' も確認済み）
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO follows (id, follower_id, followee_id)
-			SELECT $1, $2, u.id FROM users u
+			SELECT $1::varchar, $2::varchar, u.id FROM users u
 			WHERE u.id = $3 AND u.status = 'active' AND u.account_type = 'certified_public'
 			  AND NOT EXISTS (SELECT 1 FROM block_relations WHERE (blocker_id=$2 AND blocked_id=$3) OR (blocker_id=$3 AND blocked_id=$2))
 			  AND NOT EXISTS (SELECT 1 FROM follows WHERE follower_id=$2 AND followee_id=$3)`, uuid.NewString(), actor, input.UserID)
