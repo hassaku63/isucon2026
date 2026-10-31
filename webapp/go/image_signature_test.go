@@ -45,7 +45,8 @@ func TestImageURLExp(t *testing.T) {
 	now := time.Unix(1793416574, 0)
 	exp := imageURLExp(now)
 	lifetime := exp - now.Unix()
-	if exp%imageURLExpStep != 0 || lifetime < int64(imageURLLifetime/time.Second) || lifetime >= int64(imageURLLifetime/time.Second)+imageURLExpStep {
+	base := int64((imageURLLifetime + imageURLExpProbe) / time.Second)
+	if exp%imageURLExpStep != 0 || lifetime < base || lifetime >= base+imageURLExpStep {
 		t.Fatalf("unexpected exp %d (lifetime %d)", exp, lifetime)
 	}
 	if imageURLExp(now.Add(time.Second)) != exp {
