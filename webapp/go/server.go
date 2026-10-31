@@ -32,6 +32,8 @@ func NewServer(config *Config) *echo.Echo {
 		panic("failed to open database: " + err.Error())
 	}
 	db.SetMaxOpenConns(30)
+	// アイドル接続を閉じない。新規接続のたびに SCRAM 認証の計算と DB との往復（europe / america は RTT 100ms）がかかるため
+	db.SetMaxIdleConns(30)
 	err = db.Ping()
 	if err != nil {
 		panic("failed to ping database: " + err.Error())
