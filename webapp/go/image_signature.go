@@ -46,6 +46,18 @@ func imageSignature(key []byte, imageID string, exp int64) []byte {
 	if ok {
 		return sig
 	}
+	// 同じ署名を別のリクエストが計算している最中なら、その結果を待って使う（exp の刻みが変わった直後に同じ画像の計算が重なるのを防ぐ）
+	imageSignatureInflight.Lock()
+	if c, ok := imageSignatureInflight.m[cacheKey]; ok {
+		imageSignatureInflight.Unlock()
+		c.wg.Wait()
+		return c.sig
+	}
+	c := &imageSignatureCall{}
+	c.wg.Add(1)
+	imageSignatureInflight.m[cacheKey] = c
+	imageSignatureInflight.Unlock()
+
 	sig = computeImageSignature(key, imageID, exp)
 	imageSignatureCache.Lock()
 	if len(imageSignatureCache.m) >= imageSignatureCacheLimit {
@@ -53,8 +65,24 @@ func imageSignature(key []byte, imageID string, exp int64) []byte {
 	}
 	imageSignatureCache.m[cacheKey] = sig
 	imageSignatureCache.Unlock()
+
+	c.sig = sig
+	imageSignatureInflight.Lock()
+	delete(imageSignatureInflight.m, cacheKey)
+	imageSignatureInflight.Unlock()
+	c.wg.Done()
 	return sig
 }
+
+type imageSignatureCall struct {
+	wg  sync.WaitGroup
+	sig []byte
+}
+
+var imageSignatureInflight = struct {
+	sync.Mutex
+	m map[string]*imageSignatureCall
+}{m: make(map[string]*imageSignatureCall)}
 
 func resetImageSignatureCache() {
 	imageSignatureCache.Lock()
