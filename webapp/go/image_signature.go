@@ -20,7 +20,7 @@ const imageSignatureIterations = 1000
 const imageURLExpStep = 60
 
 // 実験用: 有効期限を 24 時間 + この長さにして、ベンチマーカーが許容する範囲を測る（ベンチを回す時刻によらず一定の長さで試すため）
-const imageURLExpProbe = 15 * time.Minute
+const imageURLExpProbe = 0
 
 // 署名は (鍵, 画像 ID, exp) だけで決まり副作用もないので、計算結果を使い回す。上限を超えたら捨てて作り直す
 const imageSignatureCacheLimit = 500000
