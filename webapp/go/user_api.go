@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/labstack/echo/v5"
 )
 
@@ -89,10 +90,9 @@ func registerHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		defer tx.Rollback()
-		// ユーザー名が一意である必要があります。
-		if _, err := tx.ExecContext(ctx, `LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE`); err != nil {
-			return err
-		}
+		// ユーザー名の一意性は UNIQUE インデックス（users_username）で守る。元は LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE で
+		// 登録を 1 件ずつにしていて、登録が集中すると投稿期間の開始や europe / america の登録が数秒待たされていた。
+		// 投稿期間の開始（SHARE ROW EXCLUSIVE）とは、下の INSERT が取る ROW EXCLUSIVE で今までどおりぶつかる
 		var exists bool
 		if err := tx.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)`, input.Username); err != nil {
 			return err
@@ -103,6 +103,11 @@ func registerHandler(h *HandlerContext) echo.HandlerFunc {
 		userID := uuid.NewString()
 		if _, err := tx.ExecContext(ctx, `INSERT INTO users (id, username, secret_key_hash, display_name, region) VALUES ($1, $2, $3, $4, $5)`,
 			userID, input.Username, hex.EncodeToString(hash[:]), input.DisplayName, input.Region); err != nil {
+			// 同じユーザー名の登録が同時に来たとき、後から INSERT した方はここに来る（上の EXISTS と同じ応答にする）
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "users_username" {
+				return NewAPIError(http.StatusConflict, "username_taken")
+			}
 			return err
 		}
 		user, err := getUser(ctx, tx, userID)
