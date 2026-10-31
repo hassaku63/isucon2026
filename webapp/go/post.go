@@ -136,7 +136,8 @@ func loadViewerContext(ctx context.Context, db sqlx.QueryerContext, viewerID str
     COALESCE((
       SELECT string_agg(user_low_id || ':' || user_high_id, ',')
       FROM friendships
-      WHERE user_low_id IN (SELECT id FROM friend_ids) OR user_high_id IN (SELECT id FROM friend_ids)
+      -- IN (SELECT ...) を OR でつなぐとインデックスを使えず全件を読むので、配列にして = ANY で比べる
+      WHERE user_low_id = ANY(ARRAY(SELECT id FROM friend_ids)) OR user_high_id = ANY(ARRAY(SELECT id FROM friend_ids))
     ), '') AS friendship_pairs
   FROM me
  `, viewerID); err != nil {
