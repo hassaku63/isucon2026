@@ -38,3 +38,5 @@
 | 15:08 | PR #28: shared_buffers を 128MB に戻す（#23 を戻す）。asia2 の PostgreSQL を再起動 | - | `4bd6d3e` |
 | 15:09 | PR #28 の後（shared_buffers を 128MB に戻した） | 11862 | pass。回復せず（asia 20 人）。I/O 待ち 32%、ディスクの読み込みは最大 4981 回/秒 |
 | 15:19 | PR #29: #22（ユーザー検索）と #27（IP BAN）を戻し、webapp/ と infra/files/ を #21 の後と同じにする | - | `53320e5` |
+| 15:20 | PR #29 の後（webapp/ と infra/files/ を #21 と同じに戻した） | 13054 | pass。回復せず → アプリ以外が原因。悪い回はすべて asia の投稿期間の開始が 2〜5 秒（良い回 0.7〜1.6 秒）。2 日目の開始が 1.6 秒以下なら asia が増え、2.2 秒以上なら増えない（11 回すべて） |
+| 15:30 | PR #31: 通知の ID を時刻順（UUID v7 の形式）にし、UNIQUE を (posting_window_id, user_id) に（#30）。asia2 で DDL を流した。asia 全員分の通知の作成が 5036 ms → 103 ms（EXPLAIN、ROLLBACK） | - | `eb1d1ef` |
