@@ -43,13 +43,7 @@ func openPostingWindowHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		defer tx.Rollback()
-		// 同じリージョンの開始どうしは advisory lock で順番にする（重なり・日付の確認を正しく行うため）。
-		// users は SHARE で取る。登録（SHARE ROW EXCLUSIVE）と users の更新は元どおり止めるが、
-		// ほかのリージョンの開始とはぶつからない。元は SHARE ROW EXCLUSIVE で、最終日に 3 リージョンの開始が直列になっていた
-		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('posting_window:' || $1::text))`, region); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `LOCK TABLE users IN SHARE MODE`); err != nil {
+		if _, err := tx.ExecContext(ctx, `LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE`); err != nil {
 			return err
 		}
 		var conflict bool
