@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -51,5 +52,47 @@ func TestImageURLExp(t *testing.T) {
 	}
 	if imageURLExp(now.Add(time.Second)) != exp {
 		t.Fatalf("exp should stay the same within a step")
+	}
+}
+
+// 同じ署名を多数のゴルーチンが同時に求めても、全員が参照実装と同じ値を受け取る
+func TestImageSignatureConcurrentMatchesReference(t *testing.T) {
+	resetImageSignatureCache()
+	type tc struct {
+		key     []byte
+		imageID string
+		exp     int64
+		want    []byte
+	}
+	cases := make([]tc, 8)
+	for i := range cases {
+		key := make([]byte, sha256.Size)
+		rand.Read(key)
+		imageID := "c" + strconv.Itoa(i) + "-0192f1a2-1111-7222-8333-944445555666"
+		exp := int64(1793503000 + i*60)
+		cases[i] = tc{key, imageID, exp, referenceImageSignature(key, imageID, exp)}
+	}
+	var wg sync.WaitGroup
+	errs := make(chan string, 64*len(cases))
+	for range 64 {
+		for i := range cases {
+			c := cases[i]
+			wg.Go(func() {
+				if got := imageSignature(c.key, c.imageID, c.exp); !bytes.Equal(got, c.want) {
+					errs <- c.imageID
+				}
+			})
+		}
+	}
+	wg.Wait()
+	close(errs)
+	for id := range errs {
+		t.Fatalf("concurrent imageSignature mismatch for %s", id)
+	}
+	imageSignatureInflight.Lock()
+	n := len(imageSignatureInflight.m)
+	imageSignatureInflight.Unlock()
+	if n != 0 {
+		t.Fatalf("inflight map not empty: %d", n)
 	}
 }
