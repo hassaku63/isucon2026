@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,11 +51,15 @@ func createCommentHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		defer tx.Rollback()
-		for _, id := range slices.Compact([]string{min(actor, post.AuthorID), max(actor, post.AuthorID)}) {
-			var lockedID string
-			if err := tx.GetContext(ctx, &lockedID, `SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE`, id); err != nil {
-				return err
-			}
+		// 2 人の行を 1 往復でロックし、応答に使う自分の行も一緒に読む。
+		// ORDER BY の後にロックするので、Go の min / max と同じバイト順（COLLATE "C"）に並べて順番を揃える
+		lockIDs := slices.Compact([]string{min(actor, post.AuthorID), max(actor, post.AuthorID)})
+		var lockedUsers []User
+		if err := tx.SelectContext(ctx, &lockedUsers, `SELECT `+strings.Join(userColumns, ", ")+` FROM users WHERE id IN ($1,$2) ORDER BY id COLLATE "C" FOR NO KEY UPDATE`, actor, post.AuthorID); err != nil {
+			return err
+		}
+		if len(lockedUsers) != len(lockIDs) {
+			return sql.ErrNoRows
 		}
 		allowed, err := canComment(ctx, tx, actor, post.ID)
 		if err != nil {
@@ -64,15 +69,22 @@ func createCommentHandler(h *HandlerContext) echo.HandlerFunc {
 			return NewAPIError(http.StatusForbidden, "interaction_forbidden")
 		}
 		id := uuid.NewString()
-		if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id,post_id,author_id,body,created_at) VALUES($1,$2,$3,$4,clock_timestamp())`, id, post.ID, actor, input.Body); err != nil {
+		var comment Comment
+		if err := tx.GetContext(ctx, &comment, `INSERT INTO comments(id,post_id,author_id,body,created_at) VALUES($1,$2,$3,$4,clock_timestamp()) RETURNING id,post_id,author_id,body,created_at,deleted_at`, id, post.ID, actor, input.Body); err != nil {
 			return err
 		}
-		comment, err := getComment(ctx, tx, id)
-		if err != nil {
-			return err
+		// 元は getUser（status = 'active'）で読み直していた。自分の行はロック中で変わらないので、ロックのときに読んだ行を使う
+		var user User
+		found := false
+		for _, u := range lockedUsers {
+			if u.ID == actor && u.Status == "active" {
+				user, found = u, true
+			}
 		}
-		user, err := getUser(ctx, tx, actor)
-		if err != nil {
+		if !found {
+			return sql.ErrNoRows
+		}
+		if err := user.setImageKey(); err != nil {
 			return err
 		}
 		if err := tx.Commit(); err != nil {
