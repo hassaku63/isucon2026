@@ -26,3 +26,17 @@ ssh: `isucon2026-asia1` / `isucon2026-europe1` / `isucon2026-america1`（アプ�
 - CloudFormation で作られたリソース（インスタンスタイプ等）は変更しない。SG は新しいポートの追加だけ可（22/443/8080 は触らない）
 - 設定を変えたら `sudo /usr/local/bin/envcheck` を実行する
 - 問題内容を外部に出さない（Web 検索のクエリに問題固有の情報を含めない）
+
+## 変更の手順
+
+サーバー上で直接ファイルを編集しない。リポジトリを変えて、次のコマンドで反映する（`HOSTS=isucon2026-europe1` で対象を絞れる）。
+
+| 対象 | 置き場所 | 差分の確認（サーバーは変えない） | 適用 |
+|---|---|---|---|
+| ミドルウェアの設定（nginx、PostgreSQL、systemd、env.sh） | `infra/files/{app,db,<ホスト名>}/<実際のパス>` | `make infra-diff` | `make infra-apply`（変わったものだけ reload / restart し、最後に envcheck を実行） |
+| アプリ（Go、sql） | `webapp/` | `make app-diff` | `make app-deploy`（手元でビルドして3台に配り、再起動） |
+
+- 管理する設定ファイルを増やすときは `infra/group_vars/{app,db}.yml` の `managed_files` に追加し、`make infra-fetch` で今の中身を `infra/fetched/` に取り込んでから `infra/files/` に置く
+- 3台で同じ設定は `files/app/`、サーバーごとに違うものは `files/<ホスト名>/` に置く（ホスト名の方が優先）
+- 変更禁止のファイルは `infra/group_vars/all.yml` の `forbidden_paths` に入っていて、当たると infra.yml が止まる
+- ベンチの計測: `make bench-start` / `make bench-stop`

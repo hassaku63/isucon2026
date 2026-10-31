@@ -1,0 +1,12 @@
+# infra.yml が配る設定ファイル。src は files/<ホスト名>/<path> があればそれ、なければ files/db/<path>
+managed_files:
+  - path: /etc/postgresql/16/main/postgresql.conf
+    owner: postgres
+    group: postgres
+    mode: "0644"
+    notify: restart postgresql
+  - path: /etc/postgresql/16/main/conf.d/isucon.conf
+    owner: postgres
+    group: postgres
+    mode: "0644"
+    notify: restart postgresql

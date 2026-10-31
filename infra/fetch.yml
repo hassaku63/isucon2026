@@ -1,0 +1,14 @@
+# サーバー上の managed_files を infra/fetched/<ホスト名>/<path> に取り込む（サーバーは変更しない）
+# 管理対象を増やしたときの初回取り込みに使う。取り込んだあと files/ に整理して commit する
+- hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: fetch managed files
+      ansible.builtin.fetch:
+        src: "{{ item.path }}"
+        dest: "fetched/{{ inventory_hostname }}{{ item.path }}"
+        flat: true
+      loop: "{{ managed_files }}"
+      loop_control:
+        label: "{{ item.path }}"

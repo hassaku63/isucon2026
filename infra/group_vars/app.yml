@@ -1,0 +1,22 @@
+# infra.yml が配る設定ファイル。src は files/<ホスト名>/<path> があればそれ、なければ files/app/<path>
+managed_files:
+  - path: /etc/nginx/nginx.conf
+    owner: root
+    group: root
+    mode: "0644"
+    notify: reload nginx
+  - path: /etc/nginx/sites-available/isureal.conf
+    owner: root
+    group: root
+    mode: "0644"
+    notify: reload nginx
+  - path: /etc/systemd/system/isureal-go.service
+    owner: root
+    group: root
+    mode: "0644"
+    notify: restart isureal-go
+  - path: /home/isucon/env.sh
+    owner: isucon
+    group: isucon
+    mode: "0644"
+    notify: restart isureal-go

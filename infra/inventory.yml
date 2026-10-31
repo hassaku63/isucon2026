@@ -1,0 +1,11 @@
+# ホスト名は ~/.ssh/config の Host（isucon2026-*）。ルーターは管理対象外（ログイン禁止）
+all:
+  children:
+    app:
+      hosts:
+        isucon2026-asia1:
+        isucon2026-europe1:
+        isucon2026-america1:
+    db:
+      hosts:
+        isucon2026-asia2:

@@ -5,3 +5,5 @@ webapp/go/isureal
 # macOS
 .DS_Store
 ._*
+infra/fetched/
+infra/build/

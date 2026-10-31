@@ -1,0 +1,60 @@
+# ミドルウェアの設定ファイルを配る。変わったファイルに対応するサービスだけ reload / restart する
+# 差分の確認: make infra-diff（--check --diff。サーバーは変更しない）
+- hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: managed_files must not touch files used by the organizers
+      ansible.builtin.assert:
+        that: forbidden_paths | select('in', item.path) | list | length == 0
+        fail_msg: "{{ item.path }} is forbidden by the manual"
+        quiet: true
+      loop: "{{ managed_files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: deploy managed files
+      ansible.builtin.copy:
+        src: "{{ lookup('ansible.builtin.first_found', ['files/' ~ inventory_hostname ~ item.path, 'files/' ~ group_names[0] ~ item.path]) }}"
+        dest: "{{ item.path }}"
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop: "{{ managed_files }}"
+      loop_control:
+        label: "{{ item.path }}"
+      notify: "{{ item.notify }}"
+
+  handlers:
+    - name: validate nginx
+      listen: reload nginx
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+    - name: reload nginx service
+      listen: reload nginx
+      ansible.builtin.systemd_service:
+        name: nginx
+        state: reloaded
+
+    - name: restart isureal-go service
+      listen: restart isureal-go
+      ansible.builtin.systemd_service:
+        name: isureal-go
+        state: restarted
+        daemon_reload: true
+
+    - name: restart postgresql service
+      listen: restart postgresql
+      ansible.builtin.systemd_service:
+        name: postgresql@16-main
+        state: restarted
+
+- hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: envcheck
+      ansible.builtin.command: /usr/local/bin/envcheck
+      changed_when: false
+      when: not ansible_check_mode

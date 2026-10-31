@@ -1,0 +1,38 @@
+# アプリのデプロイ。手元でビルドしたバイナリと webapp/sql をアプリサーバーに配り、変わったら再起動する
+- hosts: app
+  gather_facts: false
+  tasks:
+    - name: build isureal (local, linux/amd64)
+      delegate_to: localhost
+      run_once: true
+      ansible.builtin.command:
+        cmd: go build -o ../../infra/build/isureal ./cmd/isureal
+        chdir: ../webapp/go
+      environment: "{{ go_env }}"
+      changed_when: false
+      check_mode: false
+
+    - name: deploy binary
+      ansible.builtin.copy:
+        src: build/isureal
+        dest: /home/isucon/webapp/go/isureal
+        mode: "0755"
+      notify: restart isureal-go
+
+    # sql/ は initialize のたびに読まれるので、再起動は不要
+    - name: deploy sql
+      ansible.builtin.copy:
+        src: ../webapp/sql/
+        dest: /home/isucon/webapp/sql/
+
+    - name: keep init.sh executable
+      ansible.builtin.file:
+        path: /home/isucon/webapp/sql/init.sh
+        mode: "0755"
+
+  handlers:
+    - name: restart isureal-go
+      become: true
+      ansible.builtin.systemd_service:
+        name: isureal-go
+        state: restarted

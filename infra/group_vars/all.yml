@@ -1,0 +1,18 @@
+# 追試に使われるため変更禁止（当日マニュアル）。managed_files がここに当たったら infra.yml は止まる
+forbidden_paths:
+  - /usr/local/bin/envcheck
+  - /usr/local/bin/isucon-contest-envcheck
+  - /etc/systemd/system/envcheck.service
+  - /etc/systemd/system/envcheck-baseline.service
+  - /etc/isucon/
+  - /var/lib/isucon-envcheck/
+  - /etc/systemd/system/isucon-register.service
+  - /home/isuadmin/
+  - /etc/sudoers
+  - /etc/ssh/
+
+go_env:
+  GOTOOLCHAIN: go1.26.5
+  GOOS: linux
+  GOARCH: amd64
+  CGO_ENABLED: "0"
