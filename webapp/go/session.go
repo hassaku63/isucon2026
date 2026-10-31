@@ -65,9 +65,37 @@ func getSessionFromHeader(c *echo.Context, db *sqlx.DB) (*Session, error) {
 func SessionMiddleware(handlerContext *HandlerContext, authRequired bool) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
-			session, err := getSessionFromHeader(c, handlerContext.DB)
-			if err != nil {
-				return err
+			var session *Session
+			validated := false
+			if canRunOptimistically(c) {
+				if tokenHash, ok := sessionTokenHash(c); ok {
+					if v, ok := knownSessions.Load(tokenHash); ok {
+						handled, checked, checkErr, handlerErr := runWithOptimisticSession(c, handlerContext, v.(*Session), next)
+						if handled {
+							return handlerErr
+						}
+						if checkErr != nil {
+							return checkErr
+						}
+						// 覚えていた内容と違った。本体の結果は捨て、確認の結果で元どおりに処理する
+						knownSessions.Delete(tokenHash)
+						session, validated = checked, true
+						// 確認済みなので、そのセッションで本体を最初からやり直す
+						if session != nil {
+							knownSessions.Store(tokenHash, session)
+						}
+					}
+				}
+			}
+			if !validated {
+				var err error
+				session, err = getSessionFromHeader(c, handlerContext.DB)
+				if err != nil {
+					return err
+				}
+				if session != nil {
+					knownSessions.Store(session.TokenHash, session)
+				}
 			}
 			if session == nil && authRequired {
 				return NewAPIError(http.StatusUnauthorized, "invalid_session")
