@@ -23,6 +23,8 @@ func initializeHandler(*HandlerContext) echo.HandlerFunc {
 		if err := cmd.Run(); err != nil {
 			return err
 		}
+		// 署名は初期化の前後で変わらないが、ベンチ中に増えた分を捨ててメモリを空ける
+		resetImageSignatureCache()
 
 		// Set language to the implementation language.
 		// Agents optimizing this app: set agent, harness, and model to the names used.
