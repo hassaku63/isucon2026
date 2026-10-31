@@ -13,6 +13,9 @@ import (
 
 const ipBanReloadInterval = 200 * time.Millisecond
 
+// 裏の読み直しが止まっている（DB が遅いなど）ときは、元のようにリクエストの中で読み直す
+const ipBanStaleLimit = time.Second
+
 type IPBanList struct {
 	reloading sync.Mutex
 	snapshot  atomic.Pointer[ipBanSnapshot]
@@ -28,9 +31,29 @@ type ipBan struct {
 	BannedUntil time.Time `db:"banned_until"`
 }
 
+// 一覧を ipBanReloadInterval ごとに裏で読み直す。元はリクエストの中で読み直していて、
+// 読み直しに当たったリクエストは DB との往復（europe / america は約 100ms）を待たされていた。
+// 反映の遅れは元と同じく最大で読み直しの間隔と 1 往復分
+func (l *IPBanList) StartReloading(db *sqlx.DB) {
+	go func() {
+		ticker := time.NewTicker(ipBanReloadInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			if !l.reloading.TryLock() {
+				continue
+			}
+			loaded, err := loadIPBans(context.Background(), db)
+			if err == nil {
+				l.snapshot.Store(loaded)
+			}
+			l.reloading.Unlock()
+		}
+	}()
+}
+
 func (l *IPBanList) Banned(ctx context.Context, db *sqlx.DB, ip string) (bool, error) {
 	snapshot := l.snapshot.Load()
-	if (snapshot == nil || time.Since(snapshot.loadedAt) >= ipBanReloadInterval) && l.reloading.TryLock() {
+	if (snapshot == nil || time.Since(snapshot.loadedAt) >= ipBanStaleLimit) && l.reloading.TryLock() {
 		defer l.reloading.Unlock()
 		loaded, err := loadIPBans(ctx, db)
 		if err != nil {
