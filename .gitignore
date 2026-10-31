@@ -1,0 +1,7 @@
+# 計測ログ（大きい）
+logs/
+# ビルド成果物
+webapp/go/isureal
+# macOS
+.DS_Store
+._*
