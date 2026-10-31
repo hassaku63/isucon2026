@@ -41,6 +41,23 @@ title: ""
 - コードの位置: 例: `webapp/go/image_api.go:69`
 - スコアへの影響: 例: europe / america のユーザーがグランプリ前に脱落し、配点 20 の最終日を落としている
 
+## 図
+
+<!-- 任意。呼び出し関係・サーバー間の往復・待ち合いが論点のときだけ描く（GitHub は mermaid を描画する）。
+     数字（時間、回数、CPU の割合）は図の中に書き、出どころは「観測した事実」に書く。
+     - 処理の流れと待ち時間（サーバー間の往復、ロック待ち）: sequenceDiagram
+     - CPU プロファイルの呼び出し関係: flowchart（ノードに cum% を書く。上位だけでよい）
+     - 時間の重なり（どの処理がいつロックを持っていたか）: gantt か sequenceDiagram の Note
+     例:
+     ```mermaid
+     sequenceDiagram
+         participant App as isureal (europe1)
+         participant DB as PostgreSQL (asia2)
+         App->>DB: BEGIN（RTT 100 ms）
+         Note over App,DB: ロックを持ったまま 5 往復 ≒ 500 ms
+     ```
+-->
+
 ## 背景
 
 <!-- 任意。このテーマに至った経緯や、前提になる仕様 -->
