@@ -41,9 +41,9 @@ func canRunOptimistically(c *echo.Context) bool {
 	if c.Request().Method != http.MethodGet {
 		return false
 	}
-	// 通知は long poll で途中で Flush する。エクスポートは応答が大きい
+	// 通知は long poll で途中で Flush する
 	switch c.Path() {
-	case "/api/notifications", "/api/me/export":
+	case "/api/notifications":
 		return false
 	}
 	return true
