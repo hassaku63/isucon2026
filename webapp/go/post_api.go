@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -272,8 +273,10 @@ func updatePostHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		defer tx.Rollback()
-		var lockedUserID string
-		if err := tx.GetContext(ctx, &lockedUserID, `SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE`, userID); err != nil {
+		// 自分の行のロックと、応答に使う users の行の読み出しを 1 文で行う（元はロックの SELECT と最後の getUser の 2 回）。
+		// 元のロックは status を見ないので、ここでも見ない。status は元の getUser の位置で確かめる
+		var lockedUser User
+		if err := tx.GetContext(ctx, &lockedUser, `SELECT `+strings.Join(userColumns, ", ")+` FROM users WHERE id = $1 FOR NO KEY UPDATE`, userID); err != nil {
 			return err
 		}
 		post, err := getPost(ctx, tx, input.PostID)
@@ -286,29 +289,27 @@ func updatePostHandler(h *HandlerContext) echo.HandlerFunc {
 		if post.AuthorID != userID {
 			return NewAPIError(http.StatusForbidden, "post_not_editable")
 		}
-		window, err := getPostingWindow(ctx, tx, post.PostingWindowID)
-		if err != nil {
-			return err
-		}
-		if window.EndedAt != nil {
+		// getPost は posting_windows を JOIN して ended_at を読んでいるので、getPostingWindow で読み直さない
+		if post.WindowEndedAt != nil {
 			return NewAPIError(http.StatusForbidden, "post_not_editable")
 		}
-		if input.Caption != nil {
-			if _, err := tx.ExecContext(ctx, `UPDATE posts SET caption = $2 WHERE id = $1`, post.ID, *input.Caption); err != nil {
-				return err
-			}
-		}
-		if input.Visibility != nil {
-			if _, err := tx.ExecContext(ctx, `UPDATE posts SET visibility = $2 WHERE id = $1`, post.ID, *input.Visibility); err != nil {
-				return err
-			}
-		}
-		post, err = getPost(ctx, tx, post.ID)
-		if err != nil {
+		// 指定された項目の更新と読み直しを 1 文で行う。指定されていない項目は NULL を渡して元の値のまま
+		if err := tx.GetContext(ctx, &post, `
+			WITH p AS (
+				UPDATE posts SET caption = COALESCE($2::text, caption), visibility = COALESCE($3::text, visibility)
+				WHERE id = $1
+				RETURNING *
+			)
+			SELECT `+postColumns+`
+			FROM p JOIN posting_windows w ON w.id = p.posting_window_id
+			WHERE p.deleted_at IS NULL`, post.ID, input.Caption, input.Visibility); err != nil {
 			return err
 		}
-		user, err := getUser(ctx, tx, userID)
-		if err != nil {
+		if lockedUser.Status != "active" {
+			return sql.ErrNoRows
+		}
+		user := lockedUser
+		if err := user.setImageKey(); err != nil {
 			return err
 		}
 		if err := tx.Commit(); err != nil {
@@ -339,27 +340,30 @@ func deletePostHandler(h *HandlerContext) echo.HandlerFunc {
 		if err := tx.GetContext(ctx, &lockedUserID, `SELECT id FROM users WHERE id = $1 FOR NO KEY UPDATE`, userID); err != nil {
 			return err
 		}
-		post, err := getPost(ctx, tx, input.PostID)
+		// 投稿と、その日（posting_windows.local_date）に自分が消した投稿の数を 1 文で読む。
+		// 数えるのは自分（userID）の投稿なので、作者が自分でないときは下で 403 を返して使わない
+		var postWithDeletions struct {
+			Post
+			Deletions int `db:"deletions"`
+		}
+		err = tx.GetContext(ctx, &postWithDeletions, `
+   SELECT `+postColumns+`,
+     (SELECT count(*) FROM posts p2 JOIN posting_windows w2 ON w2.id = p2.posting_window_id
+      WHERE p2.author_id = $2 AND w2.local_date = w.local_date AND p2.deleted_at IS NOT NULL) AS deletions
+   FROM posts p JOIN posting_windows w ON w.id = p.posting_window_id
+   WHERE p.id = $1 AND p.deleted_at IS NULL
+  `, input.PostID, userID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return NewAPIError(http.StatusNotFound, "post_not_found")
 		}
 		if err != nil {
 			return err
 		}
+		post := postWithDeletions.Post
 		if post.AuthorID != userID {
 			return NewAPIError(http.StatusForbidden, "post_not_editable")
 		}
-		window, err := getPostingWindow(ctx, tx, post.PostingWindowID)
-		if err != nil {
-			return err
-		}
-		var deletions int
-		if err := tx.GetContext(ctx, &deletions, `
-   SELECT count(*) FROM posts p JOIN posting_windows w ON w.id = p.posting_window_id
-   WHERE p.author_id = $1 AND w.local_date = $2 AND p.deleted_at IS NOT NULL
-  `, userID, window.LocalDate); err != nil {
-			return err
-		}
+		deletions := postWithDeletions.Deletions
 		if deletions >= 2 {
 			return NewAPIError(http.StatusConflict, "post_slot_unavailable")
 		}
