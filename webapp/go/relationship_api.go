@@ -52,29 +52,21 @@ func followHandler(h *HandlerContext) echo.HandlerFunc {
 			return err
 		}
 		defer tx.Rollback()
-		target, err := getUser(ctx, tx, input.UserID)
+		// 相手の種別・ブロック・フォロー済みの確認と追加を 1 文で行う。どれに当たっても 409 relationship_conflict。
+		// 2 人の行は beginRelationshipTx でロック済み（status = 'active' も確認済み）
+		result, err := tx.ExecContext(ctx, `
+			INSERT INTO follows (id, follower_id, followee_id)
+			SELECT $1, $2, u.id FROM users u
+			WHERE u.id = $3 AND u.status = 'active' AND u.account_type = 'certified_public'
+			  AND NOT EXISTS (SELECT 1 FROM block_relations WHERE (blocker_id=$2 AND blocked_id=$3) OR (blocker_id=$3 AND blocked_id=$2))
+			  AND NOT EXISTS (SELECT 1 FROM follows WHERE follower_id=$2 AND followee_id=$3)`, uuid.NewString(), actor, input.UserID)
 		if err != nil {
 			return err
 		}
-		if target.AccountType != "certified_public" {
-			return NewAPIError(http.StatusConflict, "relationship_conflict")
-		}
-		blocked, err := isBlocked(ctx, tx, actor, target.ID)
-		if err != nil {
+		if n, err := result.RowsAffected(); err != nil {
 			return err
-		}
-		if blocked {
+		} else if n == 0 {
 			return NewAPIError(http.StatusConflict, "relationship_conflict")
-		}
-		var exists bool
-		if err := tx.GetContext(ctx, &exists, `SELECT EXISTS(SELECT 1 FROM follows WHERE follower_id=$1 AND followee_id=$2)`, actor, target.ID); err != nil {
-			return err
-		}
-		if exists {
-			return NewAPIError(http.StatusConflict, "relationship_conflict")
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO follows (id, follower_id, followee_id) VALUES ($1,$2,$3)`, uuid.NewString(), actor, target.ID); err != nil {
-			return err
 		}
 		if err := tx.Commit(); err != nil {
 			return err

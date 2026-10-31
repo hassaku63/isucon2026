@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -88,23 +89,29 @@ func replaceRealMojiHandler(h *HandlerContext) echo.HandlerFunc {
 		if !allowed {
 			return NewAPIError(http.StatusForbidden, "interaction_forbidden")
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE realmojis SET replaced_at=clock_timestamp() WHERE post_id=$1 AND reactor_id=$2 AND replaced_at IS NULL AND deleted_at IS NULL`, post.ID, actor); err != nil {
+		// 前の RealMoji の置き換えと、応答に使う自分の users の行の読み出しを 1 文で行う（自分の行は beginRelationshipTx でロック済み）
+		var user User
+		if err := tx.GetContext(ctx, &user, `
+			WITH upd AS (
+				UPDATE realmojis SET replaced_at=clock_timestamp() WHERE post_id=$1 AND reactor_id=$2 AND replaced_at IS NULL AND deleted_at IS NULL
+			)
+			SELECT `+strings.Join(userColumns, ", ")+` FROM users WHERE id = $2 AND status = 'active'`, post.ID, actor); err != nil {
 			return err
 		}
+		if err := user.setImageKey(); err != nil {
+			return err
+		}
+		// 画像と RealMoji の追加と読み直しを 1 文で行う。置き換え（上の UPDATE）は前の文で終わっているので、一意制約に当たらない
 		imageID := uuid.NewString()
-		if _, err := tx.ExecContext(ctx, `INSERT INTO image_objects(id,owner_user_id,data,media_type) VALUES($1,$2,$3,'image/jpeg')`, imageID, actor, data); err != nil {
-			return err
-		}
 		id := uuid.NewString()
-		if _, err := tx.ExecContext(ctx, `INSERT INTO realmojis(id,post_id,reactor_id,image_id,reaction_type,created_at) VALUES($1,$2,$3,$4,$5,clock_timestamp())`, id, post.ID, actor, imageID, input.ReactionType); err != nil {
-			return err
-		}
-		reaction, err := getRealMoji(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		user, err := getUser(ctx, tx, actor)
-		if err != nil {
+		var reaction RealMoji
+		if err := tx.GetContext(ctx, &reaction, `
+			WITH img AS (
+				INSERT INTO image_objects(id,owner_user_id,data,media_type) VALUES($1,$2,$3,'image/jpeg') RETURNING id
+			)
+			INSERT INTO realmojis(id,post_id,reactor_id,image_id,reaction_type,created_at)
+			SELECT $4,$5,$2,img.id,$6,clock_timestamp() FROM img
+			RETURNING id, post_id, reactor_id, image_id, reaction_type, created_at, replaced_at, deleted_at`, imageID, actor, data, id, post.ID, input.ReactionType); err != nil {
 			return err
 		}
 		if err := tx.Commit(); err != nil {
