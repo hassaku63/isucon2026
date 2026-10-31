@@ -11,9 +11,12 @@ import (
 )
 
 type HandlerContext struct {
-	DB     *sqlx.DB
-	Config *Config
-	IPBans *IPBanList
+	DB *sqlx.DB
+	// 本体と並列に走らせるセッション確認だけが使う。書き込みはトランザクションの接続を持ったまま確認を待つので、
+	// 同じプールだと書き込みがプールを使い切ったときに確認が接続を取れず止まる（#55 の FAIL）
+	SessionDB *sqlx.DB
+	Config    *Config
+	IPBans    *IPBanList
 }
 
 func NewServer(config *Config) *echo.Echo {
@@ -31,18 +34,26 @@ func NewServer(config *Config) *echo.Echo {
 	if err != nil {
 		panic("failed to open database: " + err.Error())
 	}
-	db.SetMaxOpenConns(30)
+	// 3 台 × (22 + 8) = 90 本で、PostgreSQL の max_connections 100 に収める
+	db.SetMaxOpenConns(22)
 	// アイドル接続を閉じない。新規接続のたびに SCRAM 認証の計算と DB との往復（europe / america は RTT 100ms）がかかるため
-	db.SetMaxIdleConns(30)
+	db.SetMaxIdleConns(22)
 	err = db.Ping()
 	if err != nil {
 		panic("failed to ping database: " + err.Error())
 	}
+	sessionDB, err := sqlx.Open("pgx", config.DatabaseDSN())
+	if err != nil {
+		panic("failed to open database: " + err.Error())
+	}
+	sessionDB.SetMaxOpenConns(8)
+	sessionDB.SetMaxIdleConns(8)
 
 	handlerContext := &HandlerContext{
-		DB:     db,
-		Config: config,
-		IPBans: &IPBanList{},
+		DB:        db,
+		SessionDB: sessionDB,
+		Config:    config,
+		IPBans:    &IPBanList{},
 	}
 	handlerContext.IPBans.StartReloading(db)
 	e.Use(IPBanMiddleware(handlerContext))

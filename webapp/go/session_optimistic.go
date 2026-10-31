@@ -113,7 +113,7 @@ func runWithOptimisticSession(c *echo.Context, h *HandlerContext, cached *Sessio
 	}
 	check := &sessionCheck{done: make(chan struct{}), cached: cached}
 	go func() {
-		check.session, check.err = getSessionFromHeader(c, h.DB)
+		check.session, check.err = getSessionFromHeader(c, h.SessionDB)
 		close(check.done)
 	}()
 
