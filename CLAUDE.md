@@ -49,3 +49,4 @@ ssh: `isucon2026-asia1` / `isucon2026-europe1` / `isucon2026-america1`（アプ�
   - PR 本文の「効果の確かめ方」の項目ごとに、前後の数値と判定を書く
   - 次の issue / PR につながる観測を書く
 - ベンチの記録やドキュメントの更新（`docs/`）は main に直接 commit してよい
+- issue / PR では、呼び出し関係（pprof）、サーバー間の往復、ロックの待ち合いが論点のときだけ mermaid で図を描く（sequenceDiagram / flowchart）。数字は図の中に書く
